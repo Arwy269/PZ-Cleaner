@@ -1,0 +1,9 @@
+# 程序本体（gui.py + pz_chunk_cleaner.py + web_server.py）只用 Python 自带的库，
+# 以下都是**可选**功能才需要的，按需安装即可。
+# 打包成 exe 后这些都不需要用户装。
+
+pywebview>=5        # 把地图嵌进程序窗口（Windows 用它的 WebView2 组件）
+pillow>=10          # 只有 tools/ 里生成底图和瓦片需要
+
+# 打包用（开发时才装）
+# pyinstaller>=6

@@ -15,8 +15,10 @@ pz_chunk_cleaner.py 里那套逻辑（命令行模式也还在，见 README）�
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
+import tempfile
 import time
 import threading
 import traceback
@@ -28,6 +30,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import pz_chunk_cleaner as eng
+import web_server
 
 
 def _dpi_aware() -> None:
@@ -54,6 +57,9 @@ class App(tk.Tk):
         self.res: Optional[Dict[str, Any]] = None      # analyze() 的结果
         self.busy = False
         self.last_plan_key: Optional[tuple] = None
+        self.server: Optional[web_server.WebServer] = None   # 内置预览服务（第一次开预览页才起）
+        self.embed = None            # 嵌进主窗口的 WebView2（embedded_view.EmbeddedBrowser）
+        self._closing = False
 
         self._init_style()
         self._build()
@@ -88,9 +94,24 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------ 布局
     def _build(self) -> None:
-        pad = {"padx": 10, "pady": 4}
-        root = ttk.Frame(self, padding=12)
-        root.pack(fill="both", expand=True)
+        # 主窗口分两个标签页：清理操作 / 地图预览（预览是嵌进来的 WebView2）
+        self.nb = ttk.Notebook(self)
+        self.nb.pack(fill="both", expand=True)
+
+        root = ttk.Frame(self.nb, padding=12)
+        self.nb.add(root, text="  ① 清理  ")
+        self.tab_map = ttk.Frame(self.nb, padding=0)
+        self.nb.add(self.tab_map, text="  ② 地图预览  ")
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        # 地图页：一块黑色宿主区域，WebView2 会挂成它的子窗口
+        self.map_host = tk.Frame(self.tab_map, bg="#101418")
+        self.map_host.pack(fill="both", expand=True)
+        self.map_host.bind("<Configure>", self._on_map_resize)
+        self.map_hint = tk.Label(self.map_host, bg="#101418", fg="#8fa3b8", justify="center",
+                                 font=("Microsoft YaHei UI", 10))
+        self.map_hint.place(relx=0.5, rely=0.5, anchor="center")
+
         root.columnconfigure(0, weight=1)
 
         # —— 存档路径
@@ -130,7 +151,7 @@ class App(tk.Tk):
         f3 = ttk.Frame(root); f3.grid(row=2, column=0, sticky="ew", pady=(12, 6))
         self.btn_scan = ttk.Button(f3, text="① 分析", command=self._on_scan)
         self.btn_scan.pack(side="left")
-        self.btn_web = ttk.Button(f3, text="打开网页预览", command=self._open_web)
+        self.btn_web = ttk.Button(f3, text="查看地图预览", command=self._open_web)
         self.btn_web.pack(side="left", padx=8)
         self.btn_go = ttk.Button(f3, text="② 执行清理", command=self._on_delete)
         self.btn_go.pack(side="left")
@@ -218,6 +239,18 @@ class App(tk.Tk):
                 kind, payload = self.q.get_nowait()
                 if kind == "log":
                     self._log(payload)
+                elif kind == "embed_ok":
+                    self._embed_ready(payload)
+                elif kind == "embed_fail":
+                    self._embed_failed(*payload)
+                elif kind == "keep":
+                    path, count = payload
+                    self._log(f"网页保存了 {count} 块额外保护区 → {path}")
+                    if not self.busy and self.res is not None:
+                        self._log("自动重新分析，把新保护区算进去…")
+                        self._on_scan()
+                    else:
+                        self._log("点「分析」重新计算后生效。")
                 elif kind == "progress":
                     done, total, nbytes = payload
                     self.pb["value"] = done * 100.0 / max(1, total)
@@ -282,13 +315,98 @@ class App(tk.Tk):
         if d:
             self.var_backup.set(d)
 
-    def _open_web(self) -> None:
-        web = eng.ensure_web_dir()
-        page = web / "index.html"
-        if not page.is_file():
-            messagebox.showerror("打不开", f"找不到网页预览：{page}")
+    # ------------------------------------------------------------------ 网页预览
+    def _sync_server_state(self) -> None:
+        """把当前状态同步给预览服务（/api/state）。"""
+        if self.server is None:
             return
-        webbrowser.open(page.resolve().as_uri())
+        if self.res:
+            r = self.res
+            self.server.set_state(save=str(r["map_dir"].parent), total=r["total_bins"],
+                                  keep=r["kept_count"], delete=r["del_count"],
+                                  safehouses=len(r["safehouses"]), analyzed=True)
+        else:
+            self.server.set_state(save=self.var_save.get().strip(), analyzed=False)
+
+    def _open_web(self) -> None:
+        """按钮入口：切到地图预览页（真正的启动在 _on_tab_changed 里做）。"""
+        self.nb.select(self.tab_map)
+
+    def _on_tab_changed(self, _e=None) -> None:
+        on_map = self.nb.index(self.nb.select()) == 1
+        if not on_map:
+            if self.embed is not None:
+                self.embed.set_visible(False)      # 子窗口不会被 Tk 自动藏起来
+            return
+        if self.embed is None:
+            self._start_embed()
+        elif self.embed.alive:
+            self.embed.set_visible(True)
+            self._sync_embed_bounds()
+
+    def _on_map_resize(self, e) -> None:
+        if self.embed is not None and self.embed.alive:
+            self.embed.set_bounds(0, 0, e.width, e.height)
+
+    def _sync_embed_bounds(self) -> None:
+        if self.embed is not None and self.embed.alive:
+            self.embed.set_bounds(0, 0, self.map_host.winfo_width(), self.map_host.winfo_height())
+
+    def _ensure_server(self) -> str:
+        """起内置服务（只监听本机），返回给网页用的地址。"""
+        web = eng.ensure_web_dir()
+        if not (web / "index.html").is_file():
+            raise RuntimeError(f"找不到网页预览：{web / 'index.html'}")
+        if self.server is None:
+            keep_file = eng.base_dir() / str(self.cfg.get("keep_file") or eng.KEEP_NAME)
+            self.server = web_server.WebServer(web, keep_file, on_keep=self._keep_from_web)
+            self.server.start()
+            self._log(f"内置预览服务已启动：{self.server.url}（只监听本机）")
+        self._sync_server_state()
+        return self.server.url + "/?auto=1"      # auto=1 → 网页自己拉当前结果
+
+    def _start_embed(self) -> None:
+        """在后台线程里起 WebView2（首次要几秒，别把界面卡住）。"""
+        self.map_hint.configure(text="正在启动内置地图（首次约 3~5 秒）…")
+        try:
+            url = self._ensure_server()
+        except Exception as e:  # noqa: BLE001
+            self.map_hint.configure(text=f"起不了预览服务：\n{e}")
+            return
+        hwnd = self.map_host.winfo_id()
+        threading.Thread(target=self._embed_worker, args=(hwnd, url), daemon=True).start()
+
+    def _embed_worker(self, hwnd: int, url: str) -> None:
+        try:
+            import embedded_view
+            # 浏览器缓存放用户目录，别塞在程序文件夹里
+            data_dir = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()) / "PZChunkCleaner" / "webview"
+            br = embedded_view.EmbeddedBrowser(hwnd, data_dir, url)
+            self.q.put(("embed_ok", br))
+        except Exception as e:  # noqa: BLE001
+            self.q.put(("embed_fail", (url, str(e))))
+
+    def _embed_ready(self, br) -> None:
+        if self._closing:               # 关窗过程中才建好 → 立刻释放，别留孤儿进程
+            br.dispose()
+            return
+        self.embed = br
+        self.map_hint.place_forget()
+        on_map = self.nb.index(self.nb.select()) == 1
+        br.set_visible(on_map)
+        if on_map:
+            self._sync_embed_bounds()
+        self._log("地图预览已嵌进主窗口。")
+
+    def _embed_failed(self, url: str, err: str) -> None:
+        self.map_hint.configure(text="嵌入失败，已改用系统浏览器打开\n（详见运行日志）")
+        self._log(f"嵌入地图失败：{err}")
+        self._log("改用系统浏览器打开预览。")
+        webbrowser.open(url)
+
+    def _keep_from_web(self, path: Path, count: int) -> None:
+        """网页保存了额外保护区（在 HTTP 线程里被调用，丢进队列让主线程处理）。"""
+        self.q.put(("keep", (path, count)))
 
     # ------------------------------------------------------------------ 分析
     def _plan_key(self) -> tuple:
@@ -498,7 +616,9 @@ class App(tk.Tk):
         self.cfg["check_server_process"] = bool(self.var_check.get())
         eng.save_config(self.cfg)
         self._log(f"分析完成：删除 {res['del_count']:,} / 保留 {res['kept_count']:,}。"
-                  "可点「打开网页预览」在地图上核对。")
+                  "可切到「② 地图预览」在地图上核对。")
+        if self.embed is not None and self.embed.alive:
+            self.embed.reload()          # 让嵌入式地图显示最新结果
         if not res["safehouses"]:
             self._log("警告：没有解析到安全屋，出于安全考虑不会允许删除。")
         else:
@@ -514,6 +634,12 @@ class App(tk.Tk):
             eng.save_config(self.cfg)
         except Exception:
             pass
+        self._closing = True
+        if self.embed is not None:
+            self.embed.dispose()        # 必须释放，否则 Chromium 子进程会残留
+            self.embed = None
+        if self.server is not None:
+            self.server.stop()
         self.destroy()
 
 
@@ -525,12 +651,62 @@ def main() -> int:
         import tempfile
         out = Path(tempfile.gettempdir()) / "pz_cleaner_selftest.txt"
         try:
+            import urllib.request
+
             app = App()
             app.withdraw()
             app.update_idletasks()
+            # 顺带验证"内置预览服务"在打包后也能真的起来、能取到数据
+            web = eng.ensure_web_dir()
+            srv = web_server.WebServer(web, eng.base_dir() / "keep.json")
+            srv.start()
+            with urllib.request.urlopen(srv.url + "/api/state", timeout=5) as r:
+                assert r.status == 200 and b'"ok"' in r.read()
+            with urllib.request.urlopen(srv.url + "/index.html", timeout=5) as r:
+                assert r.status == 200 and "区块清理" in r.read().decode("utf-8", "replace")
+            srv.stop()
             app.destroy()
-            out.write_text("OK", encoding="utf-8")
+            # 顺带检查嵌入预览要用的 WebView2 组件在不在（只加载程序集，不建窗口）
+            try:
+                import clr  # noqa: F401
+                from webview.util import interop_dll_path
+
+                clr.AddReference(interop_dll_path("Microsoft.Web.WebView2.Core.dll"))
+                clr.AddReference(interop_dll_path("Microsoft.Web.WebView2.WinForms.dll"))
+                embed = "WebView2 组件就绪 → 地图可以嵌进窗口"
+            except Exception as e:  # noqa: BLE001
+                embed = f"WebView2 组件不可用，地图预览会退回系统浏览器：{e}"
+            out.write_text(f"OK\n网页目录: {web}\n预览服务正常\n{embed}", encoding="utf-8")
             return 0
+        except Exception:
+            out.write_text(traceback.format_exc(), encoding="utf-8")
+            return 1
+    if "--selftest-embed" in sys.argv:
+        # 真开一次窗口验证"地图嵌进窗口"。会短暂显示程序窗口（约 5~10 秒），跑完立即释放。
+        import tempfile
+        out = Path(tempfile.gettempdir()) / "pz_cleaner_selftest.txt"
+        try:
+            app = App()
+            app.update_idletasks()
+            app.nb.select(app.tab_map)          # 切到地图页，触发嵌入
+            t0 = time.time()
+            while app.embed is None and time.time() - t0 < 45:
+                app.update()
+                app._pump()
+                time.sleep(0.05)
+            if app.embed is None:
+                raise RuntimeError("45 秒内没嵌入成功（详见窗口日志）")
+            app.update()
+            time.sleep(1.5)
+            app.update()
+            alive = bool(app.embed.alive)
+            app.embed.dispose()                 # 用完必须释放，避免留下 Chromium 孤儿
+            app.embed = None
+            if app.server is not None:
+                app.server.stop()
+            app.destroy()
+            out.write_text(f"OK\n嵌入成功: {alive}\n已正常释放", encoding="utf-8")
+            return 0 if alive else 1
         except Exception:
             out.write_text(traceback.format_exc(), encoding="utf-8")
             return 1

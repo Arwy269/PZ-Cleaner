@@ -15,7 +15,7 @@ function mkNode(id) {
   return nodes[id] = {
     id, textContent: "", innerHTML: "", value: "", checked: true, style: {},
     listeners,
-    classList: { add(){}, remove(){} },
+    classList: { add(){}, remove(){}, toggle(c, v){ if(c === 'collapsed') nodes.__collapsed = !!v; }, contains: () => !!nodes.__collapsed },
     addEventListener(t, fn){ (listeners[t] = listeners[t] || []).push(fn); },
     click(){}, getBoundingClientRect: () => ({width:0,height:0,left:0,top:0}),
     clientWidth: 1600, clientHeight: 900,
@@ -30,6 +30,7 @@ nodes["gridSize"].value = "300";
 
 global.document = { getElementById: (id) => nodes[id] || mkNode(id), createElement: () => mkNode("tmp"), addEventListener(){} };
 global.window = { addEventListener(){}, devicePixelRatio: 1, innerWidth: 1600, innerHeight: 900 };
+global.location = { protocol: "file:", href: "file:///index.html" };
 const imgs = [];
 global.Image = function(){ const o = {src:"", naturalWidth:0, onload:null, onerror:null}; imgs.push(o); return o; };
 global.alert = () => {};
@@ -103,6 +104,60 @@ baseCalls = 0;
 fire("c", "wheel", {clientX:800, clientY:450, deltaY:-200, preventDefault(){}});
 check("缩放会重画底层", baseCalls > 0, `底层 ${baseCalls} 次`);
 
+// ---- 收起/展开左侧面板（窗口小时把地方留给地图）----
+nodes.__collapsed = false;
+nodes["btnToggleSide"].onclick();
+check("点按钮能收起面板", nodes.__collapsed === true, `collapsed=${nodes.__collapsed}`);
+check("按钮文字变成「展开面板」", nodes["btnToggleSide"].textContent === "展开面板",
+      nodes["btnToggleSide"].textContent);
+nodes["btnToggleSide"].onclick();
+check("再点一次能展开", nodes.__collapsed === false, `collapsed=${nodes.__collapsed}`);
+check("按钮文字变回「收起面板」", nodes["btnToggleSide"].textContent === "收起面板",
+      nodes["btnToggleSide"].textContent);
+
+// ---- 第 3 阶段：被 exe 内置服务打开时（http），自动拉取结果、按钮改成"保存到清理器" ----
+{
+  const N3 = {};
+  const mk3 = (id) => {
+    const L = {};
+    return N3[id] = { id, textContent:"", innerHTML:"", value:"", checked:true, style:{}, listeners:L,
+      classList:{add(){},remove(){}}, addEventListener(t,f){ (L[t]=L[t]||[]).push(f); },
+      click(){}, getBoundingClientRect:()=>({width:0,height:0,left:0,top:0}),
+      clientWidth:1600, clientHeight:900,
+      getContext:()=>new Proxy({},{get:()=>()=>{}}) };
+  };
+  ["c","d","gridSize","chkMap","chkPop","chkSH","lockTR","lockBL","tooltip","drop","keepInfo",
+   "app","btnToggleSide","statTotal","statKeep","statDel","statSh","statSave","statWarn","hudZoom","hudCenter","hudXY",
+   "hudBin","hudFine","hudTile","hudTip","loadInfo","btnLoad","btnSaveKeep","brandHint"].forEach(mk3);
+  N3["gridSize"].value = "300";
+  const INDEX = { version:1, bin_tile_size:8, pad_tiles:0, save_root:"served-save",
+                  bins_by_x:{"1500":[[1250,1260]]}, safehouses:[], protected_bins:{},
+                  extra_rects:[], summary:{total:11, keep:0, delete:11} };
+  const sandbox = {
+    document: { getElementById: id => N3[id] || mk3(id), createElement: () => mk3("t"), addEventListener(){} },
+    window: { addEventListener(){}, devicePixelRatio:1, innerWidth:1600, innerHeight:900 },
+    location: { protocol:"http:", href:"http://127.0.0.1:1234/?auto=1" },
+    Image: function(){ return {src:"", naturalWidth:0, onload:null, onerror:null}; },
+    alert(){}, URL:{ createObjectURL: () => "x" }, console, requestAnimationFrame: f => f(),
+    fetch: (url) => Promise.resolve({
+      ok: true, status: 200,
+      json: () => Promise.resolve(url.startsWith("api/state")
+        ? {ok:true, analyzed:true, total:11, delete:11}
+        : INDEX),
+    }),
+    Math, Number, Object, Array, String, JSON, Set, Map, Int32Array, Promise,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox, {filename:"page3"});
+
+  setTimeout(() => {
+    check("内置服务模式下自动载入了分析结果", N3["statTotal"].textContent === "11", `statTotal=${N3["statTotal"].textContent}`);
+    check("按钮改成「保存到清理器」", N3["btnSaveKeep"].textContent === "保存到清理器", N3["btnSaveKeep"].textContent);
+    check("顶部提示改成已连接", N3["brandHint"].innerHTML.includes("内置预览服务"), N3["brandHint"].innerHTML.slice(0,40));
+    finish();
+  }, 60);
+}
+
 // ---- 第 2 阶段：瓦片底图（用全新上下文，避免被第一阶段的状态干扰）----
 {
   const imgs = [];
@@ -121,12 +176,13 @@ check("缩放会重画底层", baseCalls > 0, `底层 ${baseCalls} 次`);
       clientWidth:1600, clientHeight:900, getContext:()=>ctxStub };
   };
   ["c","d","gridSize","chkMap","chkPop","chkSH","lockTR","lockBL","tooltip","drop","keepInfo",
-   "statTotal","statKeep","statDel","statSh","statSave","statWarn","hudZoom","hudCenter","hudXY",
+   "app","btnToggleSide","statTotal","statKeep","statDel","statSh","statSave","statWarn","hudZoom","hudCenter","hudXY",
    "hudBin","hudFine","hudTile","hudTip","loadInfo","btnResetView"].forEach(mk2);
   N["gridSize"].value = "300";
   const sandbox = {
     document: { getElementById: id => N[id] || mk2(id), createElement: () => mk2("t"), addEventListener(){} },
     window: { addEventListener(){}, devicePixelRatio:1, innerWidth:1600, innerHeight:900 },
+    location: { protocol:"file:", href:"file:///index.html" },
     Image: function(){ const o = {src:"", naturalWidth:0, onload:null, onerror:null}; imgs.push(o); return o; },
     alert(){}, URL: { createObjectURL: () => "x" }, console, requestAnimationFrame: f => f(),
     Math, Number, Object, Array, String, JSON, Set, Map, Int32Array, Promise,
@@ -200,5 +256,8 @@ check("缩放会重画底层", baseCalls > 0, `底层 ${baseCalls} 次`);
   }
 }
 
-console.log(bad ? `\n有 ${bad} 项不符` : "\n全部通过");
-process.exit(bad ? 1 : 0);
+// 第 3 阶段的检查是异步的（等 fetch 的 Promise），所以统一在 finish() 里收尾
+function finish(){
+  console.log(bad ? `\n有 ${bad} 项不符` : "\n全部通过");
+  process.exit(bad ? 1 : 0);
+}

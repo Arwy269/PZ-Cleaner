@@ -9,16 +9,18 @@
 > 思路参考开源项目 [HDRcade pz-b42-map-cleaner](https://github.com/HDRcade-TylerFreeman/pz-b42-map-cleaner)，
 > 本工具为独立实现 + 中文化 + 免网页操作的一键流程。
 
-**从源码跑**（无需安装任何第三方库，tkinter 是 Python 自带的）：
+**从源码跑**（图形界面本身只依赖 Python 自带的 tkinter）：
 
 ```bash
-python gui.py                 # 打开图形界面
-python tests/gui_test.py      # 界面回归测试（14 项）
-node   tests/coord_test.js    # 网页回归测试（23 项，需要 node）
-python build.bat              # 打包成 dist\区块清理器.exe（需要 pyinstaller）
+pip install pywebview              # 只有"地图嵌进窗口"需要；没装会自动退回系统浏览器
+python gui.py                      # 打开图形界面
+python tests/gui_test.py           # 界面回归测试（22 项）
+python tests/web_server_test.py    # 内置预览服务测试（12 项）
+node   tests/coord_test.js         # 网页回归测试（26 项，需要 node）
+python build.bat                   # 打包成 dist\区块清理器.exe（需要 pyinstaller）
 ```
 
-只有生成底图的两个脚本要额外装 `pillow`，用法见下面「底图」一节。
+生成底图的两个脚本要额外装 `pillow`，用法见下面「底图」一节。打包成 exe 后这些都自带，用户不用装任何东西。
 
 ---
 
@@ -107,9 +109,33 @@ web\
 
 ---
 
-## 四、网页预览（核对用，可跳过）
+## 四、地图预览（核对用，可跳过）
 
-跑过一次分析后，`web\save_index.json` 就是当前存档的清理计划。打开 `web\index.html`（双击即可，无需服务器）：
+主窗口有两个标签页，**「② 地图预览」里的地图是直接嵌在程序窗口里的**（WebView2），不弹浏览器。
+
+进入这个标签页时程序会：
+
+1. 在本机起一个内置小服务（只监听 `127.0.0.1`，端口自动挑）；
+2. 把 WebView2 控件挂进窗口那块区域，加载 `http://127.0.0.1:<端口>/?auto=1`；
+3. 页面自动拉取**当前这次分析的结果**——不用找文件、不用手动载入。
+
+```
+区块清理器.exe
+ ├─ 内置服务（127.0.0.1）      /  网页   ·  /save_index.json 分析结果
+ │                             /api/state 状态 · POST /api/keep 存回保护区
+ └─ WebView2 嵌进窗口  ←───────┘
+```
+
+- **往返是通的**：在地图上 `Shift` 拖拽框出要额外保住的区域 → 点「保存到清理器」→
+  写入 exe 同目录的 `keep.json`，窗口那边会**自动重新分析**把新保护区算进去。
+- 关掉程序时 WebView2 会被**显式释放**（不释放会留下 Chromium 子进程占内存）。
+- 万一嵌入失败（缺 WebView2 运行时等），会**自动退回用系统浏览器打开**，功能一样。
+  想手动确认组件是否就绪：`区块清理器.exe --selftest`。
+
+> 想单独跑一次嵌入自检（会短暂显示窗口 5~10 秒，跑完自动释放）：
+> `区块清理器.exe --selftest-embed`
+
+地图上能看到：
 
 - **蓝** 已生成区块　**绿** 保留（安全屋）　**红** 将被删除
 - **左上角实时显示光标处的坐标**：`坐标` = 世界方格（和游戏内坐标一致），`区块` = 世界坐标 ÷ 8 的区块号；
@@ -163,6 +189,8 @@ web\
 ├── .gitignore / .gitattributes
 ├── gui.py                     # 图形界面（tkinter，Python 自带，无第三方依赖）
 ├── pz_chunk_cleaner.py        # 引擎 + 命令行模式（纯标准库）
+├── web_server.py              # 内置预览服务（只监听 127.0.0.1，纯标准库）
+├── embedded_view.py           # 把 WebView2 嵌进 Tk 窗口（Windows，需 pywebview）
 ├── pz-chunk-cleaner.spec      # PyInstaller 配置（窗口模式，产品名在 spec 里指定）
 ├── build.bat                  # 双击打包
 ├── web\
@@ -173,7 +201,8 @@ web\
 ├── tests\
 │   ├── fixture.py             # 生成样例存档（测试用，不依赖外部文件）
 │   ├── coord_test.js          # 网页逻辑回归测试（node tests/coord_test.js）
-│   └── gui_test.py            # 界面回归测试（python tests/gui_test.py）
+│   ├── gui_test.py            # 界面回归测试（python tests/gui_test.py）
+│   └── web_server_test.py     # 内置预览服务测试（python tests/web_server_test.py）
 ├── assets\                    # 底图源图放这里，见 assets\README.md
 └── dist\                      # 打包产物（.gitignore，不进版本库）
 ```

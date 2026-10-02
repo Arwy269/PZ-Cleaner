@@ -14,7 +14,10 @@
   html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
     font:14px/1.4 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",Roboto,Ubuntu,sans-serif;}
   a{color:var(--accent);text-decoration:none}
-  .app{display:grid;grid-template-columns:340px 1fr;height:100vh;}
+  .app{display:grid;grid-template-columns:320px 1fr;height:100vh;}
+  /* 收起左侧面板：窗口小的时候把地方全留给地图 */
+  .app.collapsed{grid-template-columns:0 1fr;}
+  .app.collapsed .side{display:none;}
 
   .side{background:linear-gradient(180deg,var(--panel),var(--panel2));
     border-right:1px solid var(--border);overflow:auto;}
@@ -76,19 +79,21 @@
   .drop.on{display:flex;}
   .drop div{font-size:17px;color:#cfe3ff;}
 
-  @media (max-width:980px){
+  /* 只有窗口真的很窄时才把面板挪到地图上方（嵌进程序窗口时区域本来就小，
+     阈值放低一点，免得动不动就上下堆叠） */
+  @media (max-width:720px){
     .app{grid-template-columns:1fr;grid-template-rows:auto 1fr;}
-    .side{max-height:46vh;}
+    .side{max-height:38vh;overflow:auto;}
     .legend{display:none;}
   }
 </style>
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
   <div class="side">
     <div class="brand">
       <h1>区块清理范围预览<span class="badge">B42</span></h1>
-      <div class="tiny">配合「区块清理器.exe」使用：先跑一次清理器生成
+      <div class="tiny" id="brandHint">配合「区块清理器.exe」使用：先跑一次清理器生成
         <b>save_index.json</b>，在这里核对哪些区块会被删除。</div>
     </div>
 
@@ -172,7 +177,10 @@
         <span>叠加粒度 <b id="hudFine">300 格</b></span>
         <span>瓦片 <b id="hudTile">–</b></span>
       </div>
-      <div class="hud"><span id="hudTip">拖拽平移 · 滚轮缩放 · Shift 拖拽加保护区</span></div>
+      <div class="hud">
+        <span id="hudTip">拖拽平移 · 滚轮缩放 · Shift 拖拽加保护区</span>
+        <button id="btnToggleSide" title="收起左侧控制面板，把地方全留给地图">收起面板</button>
+      </div>
     </div>
 
     <div class="legend">
@@ -860,17 +868,40 @@ function download(name, text){
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-$("btnSaveKeep").onclick = () => {
-  if(!keepRects.length){ alert("还没有框选任何额外保护区。按住 Shift 拖拽即可添加。"); return; }
-  const rects = keepRects.map(r => [
+/** 由 exe 内置服务打开时（http://127.0.0.1:xxxx）可以直接跟清理器通信；
+ *  直接双击 index.html 打开时（file://）只能靠下载/选择文件。 */
+const SERVED = /^https?:$/.test(location.protocol);
+
+function collectKeepRects(){
+  return keepRects.map(r => [
     Math.round(Math.min(r.x1,r.x2)), Math.round(Math.min(r.y1,r.y2)),
     Math.round(Math.max(r.x1,r.x2)), Math.round(Math.max(r.y1,r.y2))
   ]);
-  download("keep.json", JSON.stringify({
+}
+
+$("btnSaveKeep").onclick = async () => {
+  if(!keepRects.length){ alert("还没有框选任何额外保护区。按住 Shift 拖拽即可添加。"); return; }
+  const rects = collectKeepRects();
+  const payload = {
     version:1,
     说明:"额外保护区，世界方格坐标 [x1,y1,x2,y2]，清理器只保护安全屋、不保护这些区域以外的任何东西",
     rects
-  }, null, 2));
+  };
+  if(SERVED){
+    try{
+      const r = await fetch("api/keep", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({rects})
+      });
+      const j = await r.json();
+      if(!j.ok) throw new Error(j.error || ("HTTP " + r.status));
+      $("keepInfo").textContent = `✓ 已保存 ${rects.length} 块到清理器，窗口那边会自动重新分析。`;
+      return;
+    }catch(err){
+      $("keepInfo").textContent = "存回清理器失败（" + err.message + "），改为下载文件。";
+    }
+  }
+  download("keep.json", JSON.stringify(payload, null, 2));
 };
 
 $("btnLoadKeep").onclick = () => pickFile(".json", txt => {
@@ -947,10 +978,49 @@ $("chkSH").onchange = () => redraw();
 $("lockTR").onchange = () => redraw();
 $("lockBL").onchange = () => redraw();
 $("btnResetView").onclick = () => { fitView(); redraw(); };
+
+/* 收起/展开左侧面板：窗口小的时候把地方全留给地图（状态记在本地） */
+const SIDE_KEY = "pz_cleaner_side_collapsed";
+function applySide(collapsed){
+  $("app").classList.toggle("collapsed", collapsed);
+  $("btnToggleSide").textContent = collapsed ? "展开面板" : "收起面板";
+  try{ localStorage.setItem(SIDE_KEY, collapsed ? "1" : "0"); }catch(e){}
+  setTimeout(resize, 30);        // 布局变了，画布要重新量尺寸
+}
+$("btnToggleSide").onclick = () => applySide(!$("app").classList.contains("collapsed"));
+try{ if(localStorage.getItem(SIDE_KEY) === "1") applySide(true); }catch(e){}
 window.addEventListener("resize", resize);
 
 refreshKeepInfo();
 resize();
+
+/* ---------------- 由 exe 内置服务打开时的自动衔接 ----------------
+   服务地址形如 http://127.0.0.1:54321/?auto=1：页面自动拉当前分析结果，
+   并且能把框选的保护区直接存回清理器，不用手动选文件 / 搬 keep.json。 */
+async function bootServed(){
+  if(!SERVED) return;
+  $("brandHint").innerHTML =
+    "已连接 <b>区块清理器</b> 内置预览服务（只监听本机）。下面的数据是当前这次分析的结果，改动会自动同步。";
+  $("btnLoad").textContent = "重新载入";
+  $("btnSaveKeep").textContent = "保存到清理器";
+  try{
+    const r = await fetch("api/state", {cache:"no-store"});
+    const st = await r.json();
+    if(!st.analyzed){
+      $("loadInfo").textContent = "清理器那边还没分析过：回到窗口点「① 分析」，然后刷新本页。";
+      return;
+    }
+  }catch(e){ /* 服务不可用就走下面的载入兜底 */ }
+  try{
+    const r = await fetch("save_index.json", {cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    ingest(await r.json());
+    $("loadInfo").textContent = "已自动载入当前分析结果。";
+  }catch(err){
+    $("loadInfo").textContent = "还没拿到分析结果（" + err.message + "）：回到清理器点「① 分析」后刷新本页。";
+  }
+}
+bootServed();
 </script>
 </body>
 </html>

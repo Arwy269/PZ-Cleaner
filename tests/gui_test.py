@@ -81,6 +81,45 @@ if res:
     check("只保留了安全屋范围内的区块", left == ["1135.bin", "1136.bin"], f"剩下 {left}")
     check("删除后按钮重新禁用（要重新分析）", "disabled" in app.btn_go.state())
 
+# ---- 内置网页服务：点「打开网页预览」应该起服务并给出带 auto=1 的地址 ----
+import json as _json
+import urllib.request
+import gui as gui_mod
+
+app._on_scan()                                            # 先分析（删完之后 res 已清空）
+wait(lambda: app.res is not None and not app.busy)
+res2 = app.res
+check("重新分析成功（预览的前置条件）", res2 is not None)
+# 注意：不调 app._open_web()——那会切到地图页并把 WebView2 真的创建出来（弹窗）。
+# 只验证服务这一层，嵌入那层由 --selftest-embed 单独跑。
+url = app._ensure_server()
+check("预览服务能起来", app.server is not None and app.server.port > 0,
+      getattr(app.server, "port", None))
+check("预览地址带 auto=1（网页自己拉数据）", url.endswith("/?auto=1"), url)
+if app.server:
+    with urllib.request.urlopen(app.server.url + "/", timeout=5) as r:
+        page = r.read().decode("utf-8", "replace")
+    check("服务能取到网页", "区块清理" in page, page[:40])
+    with urllib.request.urlopen(app.server.url + "/api/state", timeout=5) as r:
+        st = _json.loads(r.read())
+    check("状态接口带着当前分析结果",
+          bool(st.get("ok")) and st.get("analyzed") and st.get("total") == (res2 or {}).get("total_bins"),
+          {k: st.get(k) for k in ("ok", "total", "delete", "analyzed")})
+
+    # 网页把框选的保护区存回 exe
+    keep_file = eng.base_dir() / "keep.json"
+    keep_file.unlink(missing_ok=True)
+    req = urllib.request.Request(app.server.url + "/api/keep",
+                                 data=b'{"rects":[[9800,9000,10000,9200]]}',
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        j = _json.loads(r.read())
+    check("网页能把保护区存回 exe", j.get("ok") and keep_file.is_file(), j)
+    if keep_file.is_file():
+        check("存回的 keep.json 格式正确",
+              _json.loads(keep_file.read_text(encoding="utf-8"))["rects"] == [[9800, 9000, 10000, 9200]])
+        keep_file.unlink()
+
 app.destroy()
 shutil.rmtree(root, ignore_errors=True)
 (eng.ensure_web_dir() / "save_index.json").unlink(missing_ok=True)
