@@ -19,7 +19,9 @@ if errorlevel 1 (
 )
 
 echo.
-echo   打包完成： dist\区块清理器.exe
+copy /y "%~dp0使用说明.txt" "%~dp0dist\使用说明.txt" >nul
+echo   打包完成： dist\区块清理器.exe
+echo   说明文件已同步： dist\使用说明.txt
 echo   分发时把整个 dist 文件夹拷过去（区块清理器.exe + web 文件夹）。
 echo.
 pause
