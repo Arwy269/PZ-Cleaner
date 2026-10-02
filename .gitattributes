@@ -1,0 +1,8 @@
+# 统一按文本处理，检出时用各平台默认换行
+* text=auto
+
+# 二进制文件不要做换行转换
+*.png binary
+*.jpg binary
+*.exe binary
+*.bin binary

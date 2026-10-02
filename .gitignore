@@ -1,0 +1,31 @@
+# 打包产物
+/dist/
+/build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行时生成（配置、预览索引、额外保护区、备份）
+config.json
+save_index.json
+keep.json
+区块备份/
+
+# 底图源图与生成物 —— 太大不进版本库，见 assets/README.md
+/assets/Map.png
+/assets/world.png
+/assets/*.jpg
+/assets/*.png
+/web/map.jpg
+/web/tiles/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
