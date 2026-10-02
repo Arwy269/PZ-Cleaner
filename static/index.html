@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>僵毁区块重置器</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">🧟 僵毁区块重置器 <span class="ver" id="ver"></span><!--NONCE--></div>
+  <div class="save-pick">
+    <select id="saveSelect" title="选择存档"></select>
+    <input id="savePath" placeholder="或输入存档目录/Map目录路径后点「选择」">
+    <button id="btnSelect" class="mini">选择</button>
+    <button id="btnRescan" class="mini">重新扫描</button>
+  </div>
+  <div class="badges">
+    <span id="pzBadge" class="badge gray">进程检测中…</span>
+    <span id="mapBadge" class="badge gray">底图加载中…</span>
+  </div>
+</header>
+
+<main id="layout">
+  <aside id="side">
+
+    <section>
+      <h3>① 选择要重置的区域</h3>
+      <div class="btnrow">
+        <button id="btnRectMode" class="tool">🖱 框选模式</button>
+        <button id="btnClear" class="tool2">清除选择</button>
+        <button id="btnZoomSel" class="tool2">缩放到选择</button>
+      </div>
+      <p class="tip" id="modeTip">开启框选模式后，在地图上<b>按住拖拽</b>框出要重置的范围（按住 Ctrl 追加选择）。</p>
+      <div class="sub">或按坐标选择（世界方格）：</div>
+      <div class="row2">
+        <label>中心X <input id="inX" type="number" step="1" placeholder="8272"></label>
+        <label>中心Y <input id="inY" type="number" step="1" placeholder="9468"></label>
+      </div>
+      <div class="row2">
+        <label>宽(格) <input id="inW" type="number" step="8" value="64"></label>
+        <label>高(格) <input id="inH" type="number" step="8" value="64"></label>
+      </div>
+      <button id="btnLocate" class="tool2 wide">按坐标选择该范围</button>
+    </section>
+
+    <section>
+      <h3>② 选择信息</h3>
+      <div id="selInfo" class="info">尚未选择</div>
+    </section>
+
+    <section>
+      <h3>③ 执行重置</h3>
+      <label class="radio"><input type="radio" name="mode" value="backup" checked> 备份后删除（推荐）</label>
+      <label class="radio"><input type="radio" name="mode" value="hard"> 直接删除（不备份）</label>
+      <label id="forceRow" class="radio warn hidden"><input type="checkbox" id="forceChk"> 我已确认服务器已停止（强制执行）</label>
+      <div class="confirm-row">
+        <span>输入 <b class="red">删除</b> 确认：</span>
+        <input id="confirmIn" placeholder="删除" autocomplete="off">
+      </div>
+      <button id="btnReset" class="danger" disabled>执行重置</button>
+      <div id="resultBox" class="log"></div>
+    </section>
+
+    <section class="help">
+      <h3>说明</h3>
+      <p>1. <b>务必先停止服务器</b>再删除区块，否则会检测拦截。</p>
+      <p>2. 删除 <code>map/X/Y.bin</code> 后，开服时该区块会整块重新生成：地形与建筑来自地图包，战利品、丧尸按世界时间重新刷新。</p>
+      <p>3. 备份位置：<span id="backupPath" class="mono">-</span></p>
+      <p>4. 底图与坐标换算来自 pzmap.org（等距投影），区块格 = <b id="divOut">8×8</b> 世界方格。</p>
+    </section>
+  </aside>
+
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div id="mapOverlay" class="overlay hidden">
+      <div class="ov-box">
+        <p id="ovMsg">底图加载失败</p>
+        <button id="btnRetryMap">重试</button>
+      </div>
+    </div>
+    <div id="hint" class="hint">提示：绿松色 = 存档中已有的区块文件；橙红 = 已选中</div>
+    <div id="rubber" class="rubber hidden"></div>
+  </div>
+</main>
+
+<footer id="statusbar">
+  <span id="coordOut">世界坐标: —</span>
+  <span id="chunkOut">区块文件: —</span>
+  <span id="zoomOut">缩放: —</span>
+  <span id="tileOut">瓦片: —</span>
+  <span id="saveOut" class="grow">存档: —</span>
+</footer>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/leaflet/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
