@@ -1,0 +1,13 @@
+{
+  "port": 8765,
+  "host": "127.0.0.1",
+  "save_roots": [
+    "C:\\Users\\Administrator\\Zomboid\\Saves\\Multiplayer"
+  ],
+  "selected_save": "C:\\Users\\Arwy\\AppData\\Local\\Temp\\pzgui_bmx1pw0i\\selfsave\\map",
+  "chunk_divisor": 8,
+  "chunk_divisor_b41": 10,
+  "backup_root": null,
+  "map_source": "auto",
+  "open_browser": true
+}

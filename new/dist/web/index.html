@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>僵毁安全屋清理器 · 清理范围预览</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#0f1620; --panel2:#0d131c;
+    --text:#e6eef9; --muted:#9fb1c6; --border:#203044;
+    --accent:#57a6ff; --warn:#ffcc66; --green:#3ddc84; --red:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.4 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",Roboto,Ubuntu,sans-serif;}
+  a{color:var(--accent);text-decoration:none}
+  .app{display:grid;grid-template-columns:340px 1fr;height:100vh;}
+
+  .side{background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border-right:1px solid var(--border);overflow:auto;}
+  .main{position:relative;overflow:hidden;}
+  .brand{padding:16px 16px 12px;border-bottom:1px solid var(--border);}
+  .brand h1{font-size:17px;margin:0 0 4px;}
+  .tiny{font-size:11px;color:var(--muted);line-height:1.5;}
+  .badge{display:inline-block;padding:1px 7px;border-radius:999px;border:1px solid var(--border);
+    color:var(--muted);font-size:11px;vertical-align:middle;margin-left:4px;}
+
+  .sec{padding:13px 16px;border-bottom:1px solid var(--border);}
+  .sec h2{font-size:13px;margin:0 0 8px;color:#d8e6ff;letter-spacing:.3px;}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:7px 0;}
+  label{color:var(--muted);font-size:12px;}
+  input[type=number],input[type=text],select{
+    background:#0a111a;color:var(--text);border:1px solid var(--border);
+    border-radius:9px;padding:6px 9px;outline:none;font-size:12px;}
+  button{background:#0a111a;color:var(--text);border:1px solid var(--border);
+    border-radius:10px;padding:7px 11px;cursor:pointer;font-size:12px;}
+  button:hover{border-color:#2f4a68}
+  button.primary{background:rgba(87,166,255,.13);border-color:rgba(87,166,255,.45)}
+  button.danger{background:rgba(255,80,80,.10);border-color:rgba(255,80,80,.45)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .hint{color:var(--muted);font-size:11.5px;line-height:1.55;white-space:pre-line;}
+  .kbd{background:#0a111a;border:1px solid var(--border);border-radius:5px;padding:0 5px;font-size:11px;}
+  .stat{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;}
+  .stat b{font-weight:600}
+  .c-green{color:var(--green)} .c-red{color:var(--red)} .c-blue{color:var(--accent)}
+  .c-warn{color:var(--warn)}
+
+  .canvasWrap{position:absolute;inset:0;}
+  canvas{display:block;width:100%;height:100%;}
+  .topBar{position:absolute;left:12px;top:12px;right:12px;display:flex;gap:10px;
+    justify-content:space-between;pointer-events:none;}
+  .topBar>*{pointer-events:auto;}
+  .hud{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+    background:rgba(10,17,26,.86);border:1px solid var(--border);border-radius:14px;padding:7px 12px;}
+  .hud span{color:var(--muted);font-size:12px;}
+  .hud b{color:var(--text);font-weight:600;}
+
+  .legend{position:absolute;right:12px;bottom:12px;width:250px;
+    background:rgba(10,17,26,.92);border:1px solid var(--border);border-radius:14px;padding:10px 12px;}
+  .legend h3{margin:0 0 7px;font-size:12.5px;color:#d8e6ff;}
+  .legRow{display:flex;gap:9px;align-items:center;margin:5px 0;}
+  .legBox{width:15px;height:15px;border-radius:4px;border:1px solid rgba(255,255,255,.22);flex:0 0 auto;}
+  .legTxt{color:var(--muted);font-size:11.5px;}
+
+  #tooltip{position:fixed;z-index:99;display:none;max-width:330px;
+    background:rgba(10,17,26,.96);border:1px solid var(--border);border-radius:11px;
+    padding:9px 11px;font-size:12px;line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,.5);}
+  #tooltip b{color:#fff}
+
+  .drop{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(8,14,22,.86);z-index:50;border:3px dashed var(--accent);border-radius:8px;}
+  .drop.on{display:flex;}
+  .drop div{font-size:17px;color:#cfe3ff;}
+
+  @media (max-width:980px){
+    .app{grid-template-columns:1fr;grid-template-rows:auto 1fr;}
+    .side{max-height:46vh;}
+    .legend{display:none;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="side">
+    <div class="brand">
+      <h1>安全屋清理范围预览<span class="badge">B42</span></h1>
+      <div class="tiny">配合「安全屋清理器.exe」使用：先跑一次清理器生成
+        <b>save_index.json</b>，在这里核对哪些区块会被删除。</div>
+    </div>
+
+    <div class="sec">
+      <h2>1) 载入数据</h2>
+      <div class="row">
+        <button class="primary" id="btnLoad">载入 save_index.json</button>
+        <button id="btnDemo" title="载入程序自带的示例数据">示例</button>
+      </div>
+      <div class="hint" id="loadInfo">也可以把 save_index.json 直接拖到页面上。</div>
+    </div>
+
+    <div class="sec">
+      <h2>2) 清理结果</h2>
+      <div class="stat"><span>已生成区块</span><b class="c-blue" id="statTotal">0</b></div>
+      <div class="stat"><span>保留（安全屋）</span><b class="c-green" id="statKeep">0</b></div>
+      <div class="stat"><span>将被删除</span><b class="c-red" id="statDel">0</b></div>
+      <div class="stat"><span>安全屋数量</span><b id="statSh">0</b></div>
+      <div class="stat"><span>存档</span><b class="tiny" id="statSave" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">-</b></div>
+      <div class="hint" id="statWarn"></div>
+    </div>
+
+    <div class="sec">
+      <h2>3) 视图</h2>
+      <div class="row">
+        <label>网格</label>
+        <select id="gridSize">
+          <option value="300" selected>300 格（城镇级）</option>
+          <option value="150">150 格</option>
+          <option value="50">50 格</option>
+          <option value="8">8 格（逐区块）</option>
+        </select>
+        <label>底图</label><input type="checkbox" id="chkMap" checked/>
+      </div>
+      <div class="row">
+        <label>显示已生成</label><input type="checkbox" id="chkPop" checked/>
+        <label>显示安全屋</label><input type="checkbox" id="chkSH" checked/>
+      </div>
+      <div class="row">
+        <label>底图锚点 TR</label><input type="text" id="lockTR" value="19796,4" style="width:100px"/>
+        <label>BL</label><input type="text" id="lockBL" value="0,15899" style="width:100px"/>
+      </div>
+      <div class="tiny">底图 map.jpg 与网页同目录，可自行替换。锚点是世界方格坐标，
+        换地图或加了地图包需要重新校准。</div>
+      <div class="row"><button id="btnResetView">回到全图</button></div>
+    </div>
+
+    <div class="sec">
+      <h2>4) 额外保护区（可选）</h2>
+      <div class="hint">清理器只保护安全屋。想额外保住某个基地 / 公共仓库时：
+<span class="kbd">Shift</span> + 拖拽 = 加一块保护区
+<span class="kbd">Ctrl+Shift</span> + 拖拽 = 减去一块
+<span class="kbd">右键</span> 框内 = 删掉该框
+<span class="kbd">退格</span> = 撤销上一块</div>
+      <div class="row">
+        <button class="primary" id="btnSaveKeep">导出 keep.json</button>
+        <button id="btnLoadKeep">载入 keep.json</button>
+        <button class="danger" id="btnClearKeep">清空</button>
+      </div>
+      <div class="hint" id="keepInfo">导出的 keep.json 放到 <b>exe 同目录</b>，清理器会自动读取。</div>
+    </div>
+
+    <div class="sec">
+      <h2>操作</h2>
+      <div class="hint">拖拽 = 平移　滚轮 = 缩放
+悬停安全屋 = 查看屋主 / 城镇 / 成员</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="canvasWrap"><canvas id="c"></canvas></div>
+
+    <div class="topBar">
+      <div class="hud">
+        <span>缩放 <b id="hudZoom">1.00</b></span>
+        <span>中心 <b id="hudCenter">0,0</b></span>
+        <span>坐标 <b id="hudXY">–</b></span>
+        <span>区块 <b id="hudBin">–</b></span>
+        <span>精细模式 <b id="hudFine">关</b></span>
+      </div>
+      <div class="hud"><span id="hudTip">拖拽平移 · 滚轮缩放 · Shift 拖拽加保护区</span></div>
+    </div>
+
+    <div class="legend">
+      <h3>图例</h3>
+      <div class="legRow"><div class="legBox" style="background:rgba(87,166,255,.25)"></div>
+        <div class="legTxt">已生成区块（存档里有数据）</div></div>
+      <div class="legRow"><div class="legBox" style="background:rgba(61,220,132,.30)"></div>
+        <div class="legTxt">保留（安全屋保护范围）</div></div>
+      <div class="legRow"><div class="legBox" style="background:rgba(255,80,80,.28)"></div>
+        <div class="legTxt">将被删除</div></div>
+      <div class="legRow"><div class="legBox" style="background:transparent;border:2px dashed rgba(61,220,132,.75)"></div>
+        <div class="legTxt">安全屋矩形</div></div>
+      <div class="legRow"><div class="legBox" style="background:transparent;border:2px dashed rgba(255,196,0,.9)"></div>
+        <div class="legTxt">额外保护区（本页框选）</div></div>
+    </div>
+
+    <div class="drop" id="drop"><div>松开鼠标以载入 save_index.json</div></div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = (n) => Number(n||0).toLocaleString("zh-CN");
+
+/* ---------------- 画布 / 相机 ---------------- */
+const canvas = $("c"), ctx = canvas.getContext("2d");
+let W=0, H=0, dpr=1;
+let camX=9000, camY=8000, zoom=0.06;
+let panning=false, panStart=null, selecting=null;
+let mouseWorld=null;                 // 光标处的世界坐标（每次重绘时按 mouseScreen 换算）
+let mouseScreen=null;                // 光标在画布内的像素位置，鼠标移出画布则为 null
+
+function resize(){
+  dpr = window.devicePixelRatio || 1;
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  canvas.width = Math.floor(W*dpr); canvas.height = Math.floor(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  draw();
+}
+const w2s = (x,y) => ({x:(x-camX)*zoom + W/2, y:(y-camY)*zoom + H/2});
+const s2w = (x,y) => ({x:(x-W/2)/zoom + camX, y:(y-H/2)/zoom + camY});
+
+/* ---------------- 数据 ---------------- */
+const BIN_TILE = 8;            // 1 区块 = 8×8 世界方格（B42）
+let binsByX = [];              // [[bx, [[y0,y1],...]], ...] 已按 bx 排序
+let protectedByX = new Map();  // bx -> Set(by)
+let safehouses = [];
+let padTiles = 0;
+let binsTotal = 0, keepTotal = 0, delTotal = 0;
+
+let gridSize = 300;
+let popCells = new Map();      // "cx,cy" -> 已生成数
+let keepCells = new Map();     // "cx,cy" -> 受保护数
+let cellMax = 1;
+
+let keepRects = [];            // 额外保护区，世界方格 {x1,y1,x2,y2}
+let hoverSH = null;
+let fineMode = false;
+
+const ck = (a,b) => a + "," + b;
+
+/* ---------------- 载入索引 ---------------- */
+function ingest(j){
+  if(!j || typeof j !== "object") throw new Error("文件内容不是 JSON 对象");
+  if(!j.bins_by_x) throw new Error("缺少 bins_by_x 字段，可能不是本工具的索引文件");
+
+  BIN_OVERRIDE = Number(j.bin_tile_size) || 8;
+  binsByX = [];
+  for(const k of Object.keys(j.bins_by_x)){
+    const bx = Number(k);
+    if(!Number.isFinite(bx)) continue;
+    const rs = [];
+    for(const r of (j.bins_by_x[k] || [])){
+      if(Array.isArray(r) && r.length >= 2){
+        const a = Number(r[0]), b = Number(r[1]);
+        if(Number.isFinite(a) && Number.isFinite(b) && b >= a) rs.push([a|0, b|0]);
+      }
+    }
+    if(rs.length) binsByX.push([bx, rs]);
+  }
+  binsByX.sort((p,q) => p[0]-q[0]);
+
+  protectedByX = new Map();
+  const pb = j.protected_bins || {};
+  for(const k of Object.keys(pb)){
+    const bx = Number(k);
+    if(!Number.isFinite(bx)) continue;
+    const s = new Set();
+    for(const item of (pb[k] || [])){
+      if(Array.isArray(item)){                 // 区间形式 [[起,止], ...]
+        const a = Number(item[0]), bb = Number(item[1]);
+        if(Number.isFinite(a) && Number.isFinite(bb)) for(let y=a; y<=bb; y++) s.add(y);
+      } else if(Number.isFinite(Number(item))){
+        s.add(Number(item));                   // 逐个列出
+      }
+    }
+    if(s.size) protectedByX.set(bx, s);
+  }
+
+  safehouses = Array.isArray(j.safehouses) ? j.safehouses : [];
+  padTiles = Number(j.pad_tiles) || 0;
+  keepRects = Array.isArray(j.extra_rects)
+    ? j.extra_rects.filter(r => Array.isArray(r) && r.length >= 4)
+        .map(r => ({x1:+r[0], y1:+r[1], x2:+r[2], y2:+r[3]}))
+    : [];
+
+  binsTotal = 0;
+  for(const [,rs] of binsByX) for(const [a,b] of rs) binsTotal += (b-a+1);
+
+  recomputeCells();
+
+  $("statTotal").textContent = fmt(binsTotal);
+  $("statSh").textContent = fmt(safehouses.length);
+  $("statSave").textContent = j.save_root || "-";
+  const s = j.summary || {};
+  $("statKeep").textContent = fmt(s.keep ?? keepTotal);
+  $("statDel").textContent  = fmt(s.delete ?? delTotal);
+  $("loadInfo").textContent = "已载入" + (j.generated_at ? "（生成于 " + j.generated_at + "）" : "");
+  $("statWarn").textContent = safehouses.length === 0
+    ? "⚠ 索引里没有任何安全屋，清理器会拒绝执行删除。"
+    : (padTiles ? "缓冲 " + padTiles + " 格已计入保留范围。" : "");
+  fitView();
+  draw();
+}
+
+let BIN_OVERRIDE = 8;
+const binSize = () => BIN_OVERRIDE || 8;
+
+function recomputeCells(){
+  const bs = binSize();
+  popCells = new Map(); keepCells = new Map(); cellMax = 1;
+  const g = gridSize;
+
+  for(const [bx, rs] of binsByX){
+    const prot = protectedByX.get(bx);
+    const cx = Math.floor(bx*bs/g);
+    for(const [y0,y1] of rs){
+      let by = y0;
+      while(by <= y1){
+        const cy = Math.floor(by*bs/g);
+        const nextBy = Math.ceil((cy+1)*g / bs);
+        const segEnd = Math.min(y1, nextBy-1);
+        const n = segEnd-by+1;
+        const k = ck(cx,cy);
+        popCells.set(k, (popCells.get(k)||0) + n);
+        if(prot) for(let i=by;i<=segEnd;i++) if(prot.has(i)){
+          keepCells.set(k, (keepCells.get(k)||0) + 1);
+        }
+        by = segEnd+1;
+      }
+    }
+  }
+  let del = 0, keep = 0;
+  for(const [k,v] of popCells){
+    const p = keepCells.get(k) || 0;
+    keep += p; del += (v - p);
+    if(v > cellMax) cellMax = v;
+  }
+  keepTotal = keep; delTotal = del;
+  $("statKeep").textContent = fmt(keep);
+  $("statDel").textContent = fmt(del);
+}
+
+/* ---------------- 视图 ---------------- */
+function fitView(){
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  const bs = binSize();
+  for(const [bx,rs] of binsByX){
+    minX = Math.min(minX, bx*bs);
+    maxX = Math.max(maxX, (bx+1)*bs);
+    for(const [a,b] of rs){ minY = Math.min(minY,a*bs); maxY = Math.max(maxY,(b+1)*bs); }
+  }
+  if(!Number.isFinite(minX)){ camX=9000; camY=8000; zoom=0.06; return; }
+  camX = (minX+maxX)/2; camY = (minY+maxY)/2;
+  zoom = clamp(Math.min(W/(maxX-minX+2000), H/(maxY-minY+2000)), 0.01, 2.5);
+}
+
+/* ---------------- 底图 ---------------- */
+let mapImg = new Image(), mapReady = false, mapErr = false;
+mapImg.onload = () => { mapReady = true; draw(); };
+mapImg.onerror = () => { mapErr = true; draw(); };
+mapImg.src = "map.jpg";
+
+const parseXY = (s) => {
+  const m = String(s||"").split(",").map(t => Number(t.trim()));
+  return (m.length === 2 && m.every(Number.isFinite)) ? {x:m[0], y:m[1]} : null;
+};
+
+/* ---------------- 绘制 ---------------- */
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const bs = binSize();
+  // 光标世界坐标：每次重绘都换算一次，平移/缩放后读数不会过期
+  mouseWorld = mouseScreen ? s2w(mouseScreen.x, mouseScreen.y) : null;
+
+  // 底图
+  if($("chkMap").checked && mapReady){
+    const tr = parseXY($("lockTR").value), bl = parseXY($("lockBL").value);
+    if(tr && bl){
+      const tl = w2s(bl.x, tr.y), br = w2s(tr.x, bl.y);
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(mapImg, tl.x, tl.y, br.x-tl.x, br.y-tl.y);
+      ctx.globalAlpha = 1;
+    }
+  } else if($("chkMap").checked && mapErr){
+    ctx.fillStyle = "rgba(255,80,80,.15)"; ctx.fillRect(12,60,430,44);
+    ctx.fillStyle = "#ffd0d0";
+    ctx.fillText("未找到 map.jpg（把它放在本网页同目录即可）", 24, 87);
+  }
+
+  const tl = s2w(0,0), br = s2w(W,H);
+  const inView = (x,y,w,h) => !(x>br.x || x+w<tl.x || y>br.y || y+h<tl.y);
+
+  // 已生成 / 保留 / 删除 叠加
+  if($("chkPop").checked){
+    for(const [k,v] of popCells){
+      const [cx,cy] = k.split(",").map(Number);
+      const x = cx*gridSize, y = cy*gridSize;
+      if(!inView(x,y,gridSize,gridSize)) continue;
+      const p = w2s(x,y), q = w2s(x+gridSize,y+gridSize);
+      const kept = keepCells.get(k) || 0;
+      const del = v - kept;
+      if(del > 0){
+        const a = clamp(0.05 + 0.22*(del/cellMax), 0.07, 0.30);
+        ctx.fillStyle = `rgba(255,80,80,${a})`;
+        ctx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
+      }
+      if(kept > 0){
+        const a = clamp(0.12 + 0.30*(kept/cellMax), 0.14, 0.45);
+        ctx.fillStyle = `rgba(61,220,132,${a})`;
+        ctx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
+      }
+    }
+  }
+
+  // 精细模式：按区块画（放大后才显示）
+  fineMode = false;
+  if($("chkPop").checked && gridSize <= 150 && zoom > 0.35){
+    fineMode = true;
+    let drawn = 0;
+    const cap = 60000;
+    ctx.fillStyle = "rgba(255,80,80,0.30)";
+    for(const [bx, rs] of binsByX){
+      const x0 = bx*bs;
+      if(x0+bs < tl.x) continue;
+      if(x0 > br.x) break;
+      const prot = protectedByX.get(bx);
+      for(const [a,b] of rs){
+        const y0 = Math.max(a, Math.floor(tl.y/bs)), y1 = Math.min(b, Math.ceil(br.y/bs));
+        for(let by=y0; by<=y1; by++){
+          if(prot && prot.has(by)) continue;
+          const p = w2s(x0, by*bs), q = w2s(x0+bs, (by+1)*bs);
+          ctx.fillRect(p.x, p.y, Math.max(1,q.x-p.x), Math.max(1,q.y-p.y));
+          if(++drawn > cap) break;
+        }
+        if(drawn > cap) break;
+      }
+      if(drawn > cap) break;
+    }
+  }
+  $("hudFine").textContent = fineMode ? "开" : "关";
+
+  // 网格线
+  ctx.strokeStyle = "rgba(255,255,255,.055)"; ctx.lineWidth = 1;
+  const gx0 = Math.floor(tl.x/gridSize)*gridSize, gy0 = Math.floor(tl.y/gridSize)*gridSize;
+  for(let x=gx0; x<=br.x; x+=gridSize){
+    const p = w2s(x,tl.y), q = w2s(x,br.y);
+    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
+  }
+  for(let y=gy0; y<=br.y; y+=gridSize){
+    const p = w2s(tl.x,y), q = w2s(br.x,y);
+    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
+  }
+
+  // 额外保护区
+  for(const r of keepRects){
+    const p = w2s(Math.min(r.x1,r.x2), Math.min(r.y1,r.y2));
+    const q = w2s(Math.max(r.x1,r.x2), Math.max(r.y1,r.y2));
+    ctx.fillStyle = "rgba(255,196,0,.14)";
+    ctx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
+    ctx.strokeStyle = "rgba(255,196,0,.90)";
+    ctx.setLineDash([6,4]); ctx.lineWidth = 2;
+    ctx.strokeRect(p.x,p.y,q.x-p.x,q.y-p.y);
+  }
+  ctx.setLineDash([]);
+
+  // 安全屋
+  hoverSH = null;
+  if($("chkSH").checked && safehouses.length){
+    const p = padTiles|0;
+    if(mouseWorld){
+      for(const sh of safehouses){
+        if(mouseWorld.x >= sh.x-p && mouseWorld.x <= sh.x+sh.w+p &&
+           mouseWorld.y >= sh.y-p && mouseWorld.y <= sh.y+sh.h+p){ hoverSH = sh; break; }
+      }
+    }
+    ctx.strokeStyle = "rgba(61,220,132,.75)";
+    ctx.setLineDash([6,4]); ctx.lineWidth = 2;
+    for(const sh of safehouses){
+      const a = w2s(sh.x, sh.y), b = w2s(sh.x+sh.w, sh.y+sh.h);
+      if(!inView(sh.x, sh.y, sh.w, sh.h)) continue;
+      ctx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
+      if(hoverSH === sh){
+        ctx.fillStyle = "rgba(61,220,132,.12)";
+        ctx.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
+      }
+      if(p > 0){
+        const a2 = w2s(sh.x-p, sh.y-p), b2 = w2s(sh.x+sh.w+p, sh.y+sh.h+p);
+        ctx.strokeStyle = "rgba(61,220,132,.30)";
+        ctx.strokeRect(a2.x, a2.y, b2.x-a2.x, b2.y-a2.y);
+        ctx.strokeStyle = "rgba(61,220,132,.75)";
+      }
+    }
+    ctx.setLineDash([]);
+  }
+
+  // 正在拖拽的框
+  if(selecting){
+    const p = w2s(Math.min(selecting.x1, selecting.x2), Math.min(selecting.y1, selecting.y2));
+    const q = w2s(Math.max(selecting.x1, selecting.x2), Math.max(selecting.y1, selecting.y2));
+    ctx.strokeStyle = "rgba(255,196,0,.95)";
+    ctx.setLineDash([6,4]); ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, q.x-p.x, q.y-p.y);
+    ctx.setLineDash([]);
+  }
+
+  // 光标十字，方便对准
+  if(mouseScreen && !panning){
+    ctx.strokeStyle = "rgba(255,255,255,.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(mouseScreen.x-7, mouseScreen.y+0.5);
+    ctx.lineTo(mouseScreen.x+7, mouseScreen.y+0.5);
+    ctx.moveTo(mouseScreen.x+0.5, mouseScreen.y-7);
+    ctx.lineTo(mouseScreen.x+0.5, mouseScreen.y+7);
+    ctx.stroke();
+  }
+
+  $("hudZoom").textContent = zoom.toFixed(2);
+  $("hudCenter").textContent = Math.round(camX) + "," + Math.round(camY);
+  updateCoordHud();
+}
+
+/* ---------------- 坐标读数 ---------------- */
+function updateCoordHud(){
+  const xy = $("hudXY"), bn = $("hudBin");
+  if(selecting){                       // 正在框选：显示选区范围与尺寸
+    const x1 = Math.round(Math.min(selecting.x1, selecting.x2));
+    const y1 = Math.round(Math.min(selecting.y1, selecting.y2));
+    const x2 = Math.round(Math.max(selecting.x1, selecting.x2));
+    const y2 = Math.round(Math.max(selecting.y1, selecting.y2));
+    xy.textContent = `${x1},${y1} → ${x2},${y2}  (${x2-x1}×${y2-y1} 格)`;
+    bn.textContent = "–";
+    return;
+  }
+  if(!mouseWorld){ xy.textContent = "–"; bn.textContent = "–"; return; }
+  const tx = Math.floor(mouseWorld.x), ty = Math.floor(mouseWorld.y);
+  const b = binSize();
+  xy.textContent = `${tx},${ty}`;
+  bn.textContent = `${Math.floor(tx/b)}/${Math.floor(ty/b)}`;
+}
+
+/* ---------------- 鼠标 ---------------- */
+const tooltip = $("tooltip");
+function showTip(px, py, html){
+  tooltip.innerHTML = html;
+  tooltip.style.display = "block";
+  tooltip.style.left = "0px"; tooltip.style.top = "0px";
+  const r = tooltip.getBoundingClientRect();
+  tooltip.style.left = clamp(px+14, 8, window.innerWidth-r.width-8) + "px";
+  tooltip.style.top  = clamp(py+14, 8, window.innerHeight-r.height-8) + "px";
+}
+
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+canvas.addEventListener("mousedown", e => {
+  const r = canvas.getBoundingClientRect();
+  const sx = e.clientX-r.left, sy = e.clientY-r.top;
+  const w = s2w(sx, sy);
+  mouseScreen = {x:sx, y:sy};
+
+  if(e.button === 2){
+    for(let i=keepRects.length-1; i>=0; i--){
+      const q = keepRects[i];
+      if(w.x >= Math.min(q.x1,q.x2) && w.x <= Math.max(q.x1,q.x2) &&
+         w.y >= Math.min(q.y1,q.y2) && w.y <= Math.max(q.y1,q.y2)){
+        keepRects.splice(i,1); draw(); refreshKeepInfo(); return;
+      }
+    }
+    return;
+  }
+  if(e.shiftKey && !e.ctrlKey && !e.metaKey){
+    selecting = {x1:w.x, y1:w.y, x2:w.x, y2:w.y};
+    return;
+  }
+  if(e.shiftKey && (e.ctrlKey || e.metaKey)){   // Ctrl+Shift = 减
+    for(let i=keepRects.length-1; i>=0; i--){
+      const q = keepRects[i];
+      if(w.x >= Math.min(q.x1,q.x2) && w.x <= Math.max(q.x1,q.x2) &&
+         w.y >= Math.min(q.y1,q.y2) && w.y <= Math.max(q.y1,q.y2)){
+        keepRects.splice(i,1);
+      }
+    }
+    draw(); refreshKeepInfo(); return;
+  }
+  panning = true; panStart = {sx, sy, camX, camY};
+});
+
+canvas.addEventListener("mousemove", e => {
+  const r = canvas.getBoundingClientRect();
+  const sx = e.clientX-r.left, sy = e.clientY-r.top;
+  const w = s2w(sx, sy);
+  mouseScreen = {x:sx, y:sy};
+
+  if(panning && panStart){
+    camX = panStart.camX - (sx-panStart.sx)/zoom;
+    camY = panStart.camY - (sy-panStart.sy)/zoom;
+    tooltip.style.display = "none";
+    draw(); return;
+  }
+  if(selecting){
+    selecting.x2 = w.x; selecting.y2 = w.y;
+    draw(); return;
+  }
+  draw();
+  if(hoverSH){
+    const sh = hoverSH;
+    showTip(e.clientX, e.clientY,
+      `<b>安全屋</b> ${sh.name ? "· " + esc(sh.name) : ""}<br>` +
+      `屋主：<b>${esc(sh.owner)}</b><br>` +
+      `城镇：${esc(sh.town)}<br>` +
+      `范围：(${sh.x}, ${sh.y}) ${sh.w}×${sh.h} 格<br>` +
+      (sh.members && sh.members.length
+        ? "成员：" + esc(sh.members.join("、")) : "成员：无记录"));
+  } else {
+    tooltip.style.display = "none";
+  }
+});
+
+canvas.addEventListener("mouseup", () => {
+  if(selecting){
+    const r = keepRects;
+    if(Math.abs(selecting.x2-selecting.x1) >= 4 && Math.abs(selecting.y2-selecting.y1) >= 4){
+      r.push({x1:selecting.x1, y1:selecting.y1, x2:selecting.x2, y2:selecting.y2});
+    }
+    selecting = null;
+    refreshKeepInfo(); draw(); return;
+  }
+  panning = false; panStart = null;
+});
+
+canvas.addEventListener("mouseleave", () => {
+  mouseScreen = null;
+  tooltip.style.display = "none";
+  draw();
+});
+
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  const ax = e.clientX-r.left, ay = e.clientY-r.top;
+  const before = s2w(ax, ay);
+  zoom = clamp(zoom * Math.exp(-e.deltaY*0.0012), 0.01, 3);
+  const after = s2w(ax, ay);
+  camX += before.x-after.x; camY += before.y-after.y;
+  draw();
+}, {passive:false});
+
+window.addEventListener("keydown", e => {
+  if((e.key === "Backspace" || e.key === "Delete") && keepRects.length){
+    keepRects.pop(); refreshKeepInfo(); draw();
+  }
+});
+
+/* ---------------- 额外保护区导出 ---------------- */
+function refreshKeepInfo(){
+  $("keepInfo").textContent = keepRects.length
+    ? `已框选 ${keepRects.length} 块额外保护区，导出后放到 exe 同目录。`
+    : "导出的 keep.json 放到 exe 同目录，清理器会自动读取。";
+}
+
+function download(name, text){
+  const url = URL.createObjectURL(new Blob([text], {type:"application/json"}));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+$("btnSaveKeep").onclick = () => {
+  if(!keepRects.length){ alert("还没有框选任何额外保护区。按住 Shift 拖拽即可添加。"); return; }
+  const rects = keepRects.map(r => [
+    Math.round(Math.min(r.x1,r.x2)), Math.round(Math.min(r.y1,r.y2)),
+    Math.round(Math.max(r.x1,r.x2)), Math.round(Math.max(r.y1,r.y2))
+  ]);
+  download("keep.json", JSON.stringify({
+    version:1,
+    说明:"额外保护区，世界方格坐标 [x1,y1,x2,y2]，清理器只保护安全屋、不保护这些区域以外的任何东西",
+    rects
+  }, null, 2));
+};
+
+$("btnLoadKeep").onclick = () => pickFile(".json", txt => {
+  try{
+    const j = JSON.parse(txt);
+    const rs = Array.isArray(j) ? j : (j.rects || []);
+    keepRects = rs.filter(r => Array.isArray(r) && r.length >= 4)
+      .map(r => ({x1:+r[0], y1:+r[1], x2:+r[2], y2:+r[3]}));
+    refreshKeepInfo(); draw();
+  }catch(err){ alert("keep.json 解析失败：" + err.message); }
+});
+
+$("btnClearKeep").onclick = () => { keepRects = []; refreshKeepInfo(); draw(); };
+
+/* ---------------- 载入 ---------------- */
+function pickFile(accept, cb){
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = accept;
+  inp.onchange = () => {
+    const f = inp.files[0];
+    if(f) f.text().then(cb);
+  };
+  inp.click();
+}
+
+$("btnLoad").onclick = () => pickFile(".json", txt => {
+  try{ ingest(JSON.parse(txt)); }
+  catch(err){ $("loadInfo").textContent = "载入失败：" + err.message; }
+});
+
+$("btnDemo").onclick = () => {
+  // 简易示例：一小片已生成区块 + 一个安全屋，方便先熟悉界面
+  const demo = {
+    version:1, generated_at:"示例数据", save_root:"（示例）",
+    bin_tile_size:8, pad_tiles:0,
+    bins_by_x:{}, safehouses:[
+      {x:9801,y:9087,w:36,h:32,owner:"示例屋主",town:"Muldraugh, KY",name:"示例安全屋",members:["小明","老王"]}
+    ],
+    protected_bins:{}, extra_rects:[],
+    summary:{}
+  };
+  const pb = {};
+  for(let bx=1225; bx<=1229; bx++){
+    demo.bins_by_x[bx] = [[1135,1139]];
+    pb[bx] = [1135,1136,1137,1138,1139];
+  }
+  for(let bx=1180; bx<=1260; bx += 4) demo.bins_by_x[bx] = [[1100,1200]];
+  demo.protected_bins = pb;
+  ingest(demo);
+};
+
+/* 拖拽载入 */
+const drop = $("drop");
+window.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("on"); });
+window.addEventListener("dragleave", e => { if(e.clientX===0 && e.clientY===0) drop.classList.remove("on"); });
+window.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("on");
+  const f = e.dataTransfer.files[0];
+  if(!f) return;
+  f.text().then(txt => {
+    try{ ingest(JSON.parse(txt)); }
+    catch(err){ $("loadInfo").textContent = "载入失败：" + err.message; }
+  });
+});
+
+/* ---------------- 控件 ---------------- */
+$("gridSize").onchange = () => {
+  gridSize = Number($("gridSize").value) || 300;
+  recomputeCells(); draw();
+};
+$("chkMap").onchange = () => draw();
+$("chkPop").onchange = () => draw();
+$("chkSH").onchange = () => draw();
+$("lockTR").onchange = () => draw();
+$("lockBL").onchange = () => draw();
+$("btnResetView").onclick = () => { fitView(); draw(); };
+window.addEventListener("resize", resize);
+
+refreshKeepInfo();
+resize();
+</script>
+</body>
+</html>

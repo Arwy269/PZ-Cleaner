@@ -1,0 +1,10 @@
+{
+  "save_root": "",
+  "pad_tiles": 0,
+  "backup_root": null,
+  "confirm_word": "删除",
+  "check_server_process": true,
+  "use_keep_file": true,
+  "keep_file": "keep.json",
+  "open_web": true
+}
