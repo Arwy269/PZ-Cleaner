@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 import pz_chunk_cleaner as eng  # noqa: E402
 
-# 这些是使用者自己的东西，不能进发布包
+# 这些是使用者自己的运行数据，不能进发布包
 EXCLUDE = ("config.json", "save_index.json", "keep.json")
 
 
@@ -55,6 +55,13 @@ def build(dist: Path, out_dir: Path, version: str) -> Path:
     if web.is_dir():
         shutil.copytree(web, stage / "web",
                         ignore=shutil.ignore_patterns(*EXCLUDE))
+
+    # 附一份**默认**配置（不含任何人的存档路径），可以先改好再启动
+    import json
+
+    (stage / "config.json").write_text(
+        json.dumps(eng.DEFAULT_CONFIG, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
 
     files = sorted(p for p in stage.rglob("*") if p.is_file())
     total = sum(p.stat().st_size for p in files)
