@@ -23,6 +23,11 @@ keep.json
 /web/map.jpg
 /web/tiles/
 
+# 发布包（作为 Release 附件上传，不进版本库）
+*.zip
+发布包信息.txt
+/_verify/
+
 # 编辑器
 .vscode/
 .idea/
