@@ -217,33 +217,33 @@ def _locate_town(strings: Sequence[Tuple[int, str]], owner: str) -> Tuple[str, i
     return "", -1
 
 
-def _pick_house_name(strings: Sequence[Tuple[int, str]], owner: str, town_pos: int) -> str:
+def _pick_house_name(strings: Sequence[Tuple[int, str]], owner: str, town_at: int) -> str:
     """安全屋名没有独立标记，只能按它离城镇字段多远来猜。"""
     best_pos, best = -1, ""
     for pos, s in strings:                 # 城镇之前 _NAME_BEFORE 内，取最靠近城镇的那个
-        if pos >= town_pos or s == owner or _TOWN_PATTERN.match(s):
+        if pos >= town_at or s == owner or _TOWN_PATTERN.match(s):
             continue
-        if town_pos - pos <= _NAME_BEFORE and pos > best_pos:
+        if town_at - pos <= _NAME_BEFORE and pos > best_pos:
             best_pos, best = pos, s
     if best:
         return best
 
     for pos, s in strings:                 # 前面没有就退而取城镇之后的第一串
-        if pos <= town_pos or s == owner or _TOWN_PATTERN.match(s):
+        if pos <= town_at or s == owner or _TOWN_PATTERN.match(s):
             continue
-        if pos - town_pos <= _NAME_AFTER:
+        if pos - town_at <= _NAME_AFTER:
             return s
         break                              # 串按位置升序，再往后只会更远
     return ""
 
 
 def _pick_members(
-    strings: Sequence[Tuple[int, str]], owner: str, town: str, town_pos: int, name: str
+    strings: Sequence[Tuple[int, str]], owner: str, town: str, town_at: int, name: str
 ) -> List[str]:
     """城镇字段之后 _MEMBER_WINDOW 字节内，其余像人名的串算作成员。"""
     out: List[str] = []
     for pos, s in strings:
-        if pos - town_pos > _MEMBER_WINDOW:
+        if pos - town_at > _MEMBER_WINDOW:
             break
         if s in (owner, town, name) or _TOWN_PATTERN.match(s):
             continue
@@ -274,23 +274,23 @@ def parse_safehouses(meta_path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
     for idx, (head, x, y, w, h, owner, p2) in enumerate(cands):
         # 每条记录的字段都挤在下一个签名之前，扫到那里就停
         stop = cands[idx + 1][0] if idx + 1 < len(cands) else p2 + _RECORD_GAP
-        window_end = min(len(b), max(p2, stop))
+        scan_stop = min(len(b), max(p2, stop))
 
         strings: List[Tuple[int, str]] = []
         seen: Set[str] = set()
-        for pos, s in _scan_strings(b, p2, window_end):
+        for pos, s in _scan_strings(b, p2, scan_stop):
             if s not in seen:
                 seen.add(s)
                 strings.append((pos, s))
 
-        town, town_pos = _locate_town(strings, owner)
-        if town_pos < 0:
+        town, town_at = _locate_town(strings, owner)
+        if town_at < 0:
             continue
 
-        name = _pick_house_name(strings, owner, town_pos)
+        name = _pick_house_name(strings, owner, town_at)
         records.append({
             "x": int(x), "y": int(y), "w": int(w), "h": int(h),
-            "members": _pick_members(strings, owner, town, town_pos, name),
+            "members": _pick_members(strings, owner, town, town_at, name),
             "name": name, "owner": owner, "town": town,
         })
 
