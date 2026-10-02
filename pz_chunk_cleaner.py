@@ -9,7 +9,7 @@ Project Zomboid Build 42 (42.x) 存档清理工具：
     服务器重启后这些区域会按地图包重新生成（地形/建筑/战利品/丧尸）。
 
 安全屋坐标从存档根目录的 map_meta.bin 解析（B42 未公开格式，采用签名扫描）。
-思路参考开源项目 HDRcade pz-b42-map-cleaner，本程序为独立实现 + 中文界面。
+字段布局跟游戏版本绑定，官方一改就可能失效，届时跑一次 --list 立刻能看出来。
 
 用法:
     区块清理器.exe                            # 交互式，自动找存档
@@ -39,9 +39,8 @@ CONFIG_NAME = "config.json"
 INDEX_NAME = "save_index.json"
 KEEP_NAME = "keep.json"
 
-BIN_TILE_SIZE = 8          # B42：1 个区块 = 8×8 个世界方格
+CELL_TILES = 8             # B42：1 个区块 = 8×8 个世界方格
 MAX_SAFEHOUSE_PAD = 500    # 缓冲上限，防止手滑填 999999
-TOWN_RE = re.compile(r"^[^,]+,\s*KY$")
 
 # ---------------------------------------------------------------------------
 # 控制台输出（中文 / 颜色）
@@ -151,33 +150,49 @@ _OWNER_CHARS = rb"[A-Za-z0-9_\-\. ]"
 _SIG_RE = re.compile(rb"\x00([\x01-\x28])(" + _OWNER_CHARS + rb"{1,40})[\s\S]{8}\x00\1\2")
 _STR_RE = re.compile(rb"\x00([\x01-\x8c])([\x20-\x7e]{1,140})")
 
-_NAME_OK_RE = re.compile(r"^[A-Za-z0-9_\-\. ]{1,40}$")
+# 安全屋矩形要落在这个范围里才算数，否则当成正则误命中丢掉
+_RECT_MAX_POS = 40_000
+_RECT_MAX_SIDE = 800
+
+# 屋主 / 安全屋名 / 成员都只会是短 ASCII 串，用长度和字符集滤掉二进制噪声
+_NAME_MAX = 40
+_NAME_OK_RE = re.compile(r"^[A-Za-z0-9_\-\. ]{1,%d}$" % _NAME_MAX)
+
+# 城镇字段形如 "Muldraugh, KY"，比人名可靠得多，用来给整条记录定位
+_TOWN_PATTERN = re.compile(r"^[^,]+,\s*KY$")
+
+# 记录里各字段之间没有长度标记，只能按"离城镇字段多远"来推断
+_RECORD_GAP = 2500      # 够不到下一条记录起点时，最多往后扫这么多字节
+_NAME_BEFORE = 140      # 城镇之前这个距离内、最靠城镇的一串 = 安全屋名
+_NAME_AFTER = 220       # 前面没找到时，退而取城镇之后这个距离内的第一串
+_MEMBER_WINDOW = 300    # 城镇之后这个距离内，其余像人名的串算成员
 
 
-def _is_reasonable_name(s: str) -> bool:
-    if not (1 <= len(s) <= 40):
+def _is_plausible_name(s: str) -> bool:
+    if not s or s != s.strip() or len(s) > _NAME_MAX:
         return False
-    if s.strip() != s or not s.strip():
+    return _NAME_OK_RE.match(s) is not None
+
+
+def _is_plausible_rect(x: int, y: int, w: int, h: int) -> bool:
+    if not (0 <= x <= _RECT_MAX_POS and 0 <= y <= _RECT_MAX_POS):
         return False
-    return bool(_NAME_OK_RE.match(s))
+    return 1 <= w <= _RECT_MAX_SIDE and 1 <= h <= _RECT_MAX_SIDE
 
 
 def _find_signatures(b: bytes) -> List[Tuple[int, int, int, int, int, str, int]]:
     """返回 [(记录起点, x, y, w, h, 屋主, 屋主字符串结束位置)]。"""
     out: List[Tuple[int, int, int, int, int, str, int]] = []
     for m in _SIG_RE.finditer(b):
-        i = m.start() - 16
-        if i < 0:
+        head = m.start() - 16
+        if head < 0:
             continue
-        x, y, w, h = struct.unpack_from(">iiii", b, i)
-        if not (0 <= x <= 40000 and 0 <= y <= 40000):
-            continue
-        if not (1 <= w <= 800 and 1 <= h <= 800):
+        x, y, w, h = struct.unpack_from(">iiii", b, head)
+        if not _is_plausible_rect(x, y, w, h):
             continue
         owner = m.group(2).decode("ascii", "ignore").strip()
-        if not owner:
-            continue
-        out.append((i, x, y, w, h, owner, m.end()))
+        if owner:
+            out.append((head, x, y, w, h, owner, m.end()))
     return out
 
 
@@ -191,6 +206,49 @@ def _scan_strings(b: bytes, start: int, end: int) -> List[Tuple[int, str]]:
         s = raw.decode("utf-8", "ignore").strip()
         if s:
             out.append((m.start(), s))
+    return out
+
+
+def _locate_town(strings: Sequence[Tuple[int, str]], owner: str) -> Tuple[str, int]:
+    """定位城镇字段；找不到就说明这条候选是误命中，返回 ("", -1)。"""
+    for pos, s in strings:
+        if s != owner and _TOWN_PATTERN.match(s):
+            return s, pos
+    return "", -1
+
+
+def _pick_house_name(strings: Sequence[Tuple[int, str]], owner: str, town_pos: int) -> str:
+    """安全屋名没有独立标记，只能按它离城镇字段多远来猜。"""
+    best_pos, best = -1, ""
+    for pos, s in strings:                 # 城镇之前 _NAME_BEFORE 内，取最靠近城镇的那个
+        if pos >= town_pos or s == owner or _TOWN_PATTERN.match(s):
+            continue
+        if town_pos - pos <= _NAME_BEFORE and pos > best_pos:
+            best_pos, best = pos, s
+    if best:
+        return best
+
+    for pos, s in strings:                 # 前面没有就退而取城镇之后的第一串
+        if pos <= town_pos or s == owner or _TOWN_PATTERN.match(s):
+            continue
+        if pos - town_pos <= _NAME_AFTER:
+            return s
+        break                              # 串按位置升序，再往后只会更远
+    return ""
+
+
+def _pick_members(
+    strings: Sequence[Tuple[int, str]], owner: str, town: str, town_pos: int, name: str
+) -> List[str]:
+    """城镇字段之后 _MEMBER_WINDOW 字节内，其余像人名的串算作成员。"""
+    out: List[str] = []
+    for pos, s in strings:
+        if pos - town_pos > _MEMBER_WINDOW:
+            break
+        if s in (owner, town, name) or _TOWN_PATTERN.match(s):
+            continue
+        if s not in out and _is_plausible_name(s):
+            out.append(s)
     return out
 
 
@@ -213,57 +271,27 @@ def parse_safehouses(meta_path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
         return [], warnings
 
     records: List[Dict[str, Any]] = []
-    for idx, (off, x, y, w, h, owner, p2) in enumerate(cands):
-        next_off = cands[idx + 1][0] if idx + 1 < len(cands) else min(len(b), p2 + 2500)
-        window_end = max(p2, next_off)
+    for idx, (head, x, y, w, h, owner, p2) in enumerate(cands):
+        # 每条记录的字段都挤在下一个签名之前，扫到那里就停
+        stop = cands[idx + 1][0] if idx + 1 < len(cands) else p2 + _RECORD_GAP
+        window_end = min(len(b), max(p2, stop))
 
         strings: List[Tuple[int, str]] = []
         seen: Set[str] = set()
         for pos, s in _scan_strings(b, p2, window_end):
-            if s in seen:
-                continue
-            seen.add(s)
-            strings.append((pos, s))
+            if s not in seen:
+                seen.add(s)
+                strings.append((pos, s))
 
-        # 城镇：形如 "Muldraugh, KY"
-        town, town_pos = "", None
-        for pos, s in strings:
-            if s != owner and TOWN_RE.match(s):
-                town, town_pos = s, pos
-                break
-        if town_pos is None:
+        town, town_pos = _locate_town(strings, owner)
+        if town_pos < 0:
             continue
 
-        # 安全屋名：城镇之前最近的一个字符串（排除屋主 / 其它城镇名）
-        name = ""
-        before = sorted(
-            (p for p, s in strings if p < town_pos and s != owner and not TOWN_RE.match(s)),
-            key=lambda p: town_pos - p,
-        )
-        for p in before:
-            if town_pos - p <= 140:
-                name = next(s for q, s in strings if q == p)
-                break
-        if not name:
-            after = [(p, s) for p, s in strings
-                     if p > town_pos and s != owner and not TOWN_RE.match(s)]
-            after.sort(key=lambda t: t[0])
-            if after and after[0][0] - town_pos <= 220:
-                name = after[0][1]
-
-        # 成员名单：窗口内其它像人名的字符串（城镇之后 300 字节为界）
-        members: List[str] = []
-        for pos, s in strings:
-            if pos > town_pos + 300:
-                continue
-            if s in (owner, town, name) or TOWN_RE.match(s):
-                continue
-            if _is_reasonable_name(s) and s not in members:
-                members.append(s)
-
+        name = _pick_house_name(strings, owner, town_pos)
         records.append({
             "x": int(x), "y": int(y), "w": int(w), "h": int(h),
-            "owner": owner, "town": town, "name": name, "members": members,
+            "members": _pick_members(strings, owner, town, town_pos, name),
+            "name": name, "owner": owner, "town": town,
         })
 
     if not records:
@@ -316,18 +344,17 @@ def scan_bins(map_dir: Path) -> Tuple[Dict[int, List[int]], int, int]:
 
 
 def compress_ranges(values: Sequence[int]) -> List[List[int]]:
-    """把有序整数列表压成 [[起,止], ...] 区间。"""
+    """把有序整数列表压成 [[起,止], ...] 区间（一个 X 目录下常有上千个 Y）。"""
     if not values:
         return []
     out: List[List[int]] = []
-    a = b = values[0]
+    start = prev = values[0]
     for v in values[1:]:
-        if v == b + 1:
-            b = v
-        else:
-            out.append([a, b])
-            a = b = v
-    out.append([a, b])
+        if v - prev > 1:                  # 断档，上一段在这里收口
+            out.append([start, prev])
+            start = v
+        prev = v
+    out.append([start, prev])
     return out
 
 
@@ -346,7 +373,7 @@ def build_protected(
     """
     prot: Dict[int, Set[int]] = {}
     p = max(0, int(pad))
-    t = BIN_TILE_SIZE
+    t = CELL_TILES
 
     def add_rect(x1: float, y1: float, x2: float, y2: float) -> None:
         bx1 = max(0, int((min(x1, x2) - p) // t))
@@ -733,20 +760,20 @@ def write_index(root: Path, res: Dict[str, Any], web_dir: Path) -> Optional[Path
         "version": 1,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "save_root": str(root),
-        "bin_tile_size": BIN_TILE_SIZE,
-        "bins": res["total_bins"],
-        "bins_by_x": {str(bx): compress_ranges(ys) for bx, ys in res["bins"].items()},
-        "safehouses": res["safehouses"],
-        "extra_rects": res["extra_rects"],
-        "pad_tiles": res["pad"],
-        # 用区间压缩，缓冲设得很大时体积也不会爆
-        "protected_bins": {str(bx): compress_ranges(sorted(v))
-                           for bx, v in res["protected"].items()},
         "summary": {
             "total": res["total_bins"],
             "delete": res["del_count"],
             "keep": res["kept_count"],
         },
+        "cell_tiles": CELL_TILES,
+        "pad": res["pad"],
+        "cell_count": res["total_bins"],
+        "cells_by_x": {str(bx): compress_ranges(ys) for bx, ys in res["bins"].items()},
+        # 保护区同样按区间压缩，缓冲设得很大时体积也不会爆
+        "protected_cells": {str(bx): compress_ranges(sorted(v))
+                            for bx, v in res["protected"].items()},
+        "safehouses": res["safehouses"],
+        "extra_rects": res["extra_rects"],
     }
     for target in (web_dir / INDEX_NAME, base_dir() / INDEX_NAME):
         try:

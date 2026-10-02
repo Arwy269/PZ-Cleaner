@@ -5,122 +5,139 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>僵毁区块清理器 · 清理范围预览</title>
 <style>
+  /* 亮色配色：白底浅灰，强调色用紫（不跟 PZ 地图的蓝绿撞色）。
+     保留=绿，删除=红，额外保护区=琥珀 */
   :root{
-    --bg:#0b0f14; --panel:#0f1620; --panel2:#0d131c;
-    --text:#e6eef9; --muted:#9fb1c6; --border:#203044;
-    --accent:#57a6ff; --warn:#ffcc66; --green:#3ddc84; --red:#ff6b6b;
+    --c-bg:         #eceef2;   /* 页面底色 */
+    --c-panel:      #ffffff;   /* 侧栏上端 */
+    --c-panel-deep: #f6f7fa;   /* 侧栏下端（渐变终点） */
+    --c-field:      #ffffff;   /* 输入框底 */
+    --c-btn:        #f1f3f7;   /* 按钮 / 键帽底 */
+    --c-btn-hot:    #e7eaf1;   /* 按钮悬停 */
+    --c-line:       #d5dae2;   /* 分隔线、边框 */
+    --c-line-hot:   #a7b1bf;   /* 悬停时的边框 */
+    --c-ink:        #1e242e;   /* 正文 */
+    --c-ink-soft:   #5f6b7a;   /* 次要文字 */
+    --c-heading:    #2b3441;   /* 小标题 */
+    --c-accent:     #6d4ac4;   /* 强调（已生成 / 链接） */
+    --c-warn:       #8f5d00;   /* 警告 */
+    --c-keep:       #1c7d47;   /* 保留 */
+    --c-drop:       #b52d2d;   /* 删除 */
+    --c-shadow:     0 2px 10px rgba(24,32,48,.12);
   }
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+  html,body{height:100%;margin:0;background:var(--c-bg);color:var(--c-ink);
     font:14px/1.4 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",Roboto,Ubuntu,sans-serif;}
-  a{color:var(--accent);text-decoration:none}
-  .app{display:grid;grid-template-columns:320px 1fr;height:100vh;}
+  a{color:var(--c-accent);text-decoration:none}
+  .shell{display:grid;grid-template-columns:320px 1fr;height:100vh;}
   /* 收起左侧面板：窗口小的时候把地方全留给地图 */
-  .app.collapsed{grid-template-columns:0 1fr;}
-  .app.collapsed .side{display:none;}
+  .shell.collapsed{grid-template-columns:0 1fr;}
+  .shell.collapsed .sidebar{display:none;}
 
-  .side{background:linear-gradient(180deg,var(--panel),var(--panel2));
-    border-right:1px solid var(--border);overflow:auto;}
-  .main{position:relative;overflow:hidden;}
-  .brand{padding:16px 16px 12px;border-bottom:1px solid var(--border);}
-  .brand h1{font-size:17px;margin:0 0 4px;}
-  .tiny{font-size:11px;color:var(--muted);line-height:1.5;}
-  .badge{display:inline-block;padding:1px 7px;border-radius:999px;border:1px solid var(--border);
-    color:var(--muted);font-size:11px;vertical-align:middle;margin-left:4px;}
+  .sidebar{background:linear-gradient(180deg,var(--c-panel),var(--c-panel-deep));
+    border-right:1px solid var(--c-line);overflow:auto;}
+  .viewport{position:relative;overflow:hidden;background:#e3e6ec;}
+  .masthead{padding:16px 16px 12px;border-bottom:1px solid var(--c-line);}
+  .masthead h1{font-size:17px;margin:0 0 4px;}
+  .note{font-size:11px;color:var(--c-ink-soft);line-height:1.5;}
+  .tag{display:inline-block;padding:1px 7px;border-radius:999px;border:1px solid var(--c-line);
+    background:#fff;color:var(--c-ink-soft);font-size:11px;vertical-align:middle;margin-left:4px;}
 
-  .sec{padding:13px 16px;border-bottom:1px solid var(--border);}
-  .sec h2{font-size:13px;margin:0 0 8px;color:#d8e6ff;letter-spacing:.3px;}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:7px 0;}
-  label{color:var(--muted);font-size:12px;}
+  .block{padding:13px 16px;border-bottom:1px solid var(--c-line);}
+  .block h2{font-size:13px;margin:0 0 8px;color:var(--c-heading);letter-spacing:.3px;}
+  .ctlRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:7px 0;}
+  label{color:var(--c-ink-soft);font-size:12px;}
   input[type=number],input[type=text],select{
-    background:#0a111a;color:var(--text);border:1px solid var(--border);
+    background:var(--c-field);color:var(--c-ink);border:1px solid var(--c-line);
     border-radius:9px;padding:6px 9px;outline:none;font-size:12px;}
-  button{background:#0a111a;color:var(--text);border:1px solid var(--border);
+  button{background:var(--c-btn);color:var(--c-ink);border:1px solid var(--c-line);
     border-radius:10px;padding:7px 11px;cursor:pointer;font-size:12px;}
-  button:hover{border-color:#2f4a68}
-  button.primary{background:rgba(87,166,255,.13);border-color:rgba(87,166,255,.45)}
-  button.danger{background:rgba(255,80,80,.10);border-color:rgba(255,80,80,.45)}
+  button:hover{background:var(--c-btn-hot);border-color:var(--c-line-hot)}
+  button.actGo{background:#efe9fb;border-color:#c3b0e8;color:#4c2f96}
+  button.actRisky{background:#fdeeee;border-color:#eebcbc;color:#8f2323}
   button:disabled{opacity:.45;cursor:not-allowed}
-  .hint{color:var(--muted);font-size:11.5px;line-height:1.55;white-space:pre-line;}
-  .kbd{background:#0a111a;border:1px solid var(--border);border-radius:5px;padding:0 5px;font-size:11px;}
+  .tipbox{color:var(--c-ink-soft);font-size:11.5px;line-height:1.55;white-space:pre-line;}
+  .kbd{background:var(--c-btn);border:1px solid var(--c-line);border-radius:5px;padding:0 5px;font-size:11px;}
   .stat{display:flex;justify-content:space-between;font-size:12px;padding:2px 0;}
   .stat b{font-weight:600}
-  .c-green{color:var(--green)} .c-red{color:var(--red)} .c-blue{color:var(--accent)}
-  .c-warn{color:var(--warn)}
+  .c-green{color:var(--c-keep)} .c-red{color:var(--c-drop)} .c-blue{color:var(--c-accent)}
+  .c-warn{color:var(--c-warn)}
 
-  .canvasWrap{position:absolute;inset:0;}
+  .stage{position:absolute;inset:0;}
   canvas{display:block;width:100%;height:100%;}
   /* 双层画布：底层画地图/叠加/安全屋（只在视图变化时重绘），
      上层画光标十字与拖拽框（每次鼠标移动重绘，很便宜） */
-  .canvasWrap canvas{position:absolute;inset:0;}
-  #d{pointer-events:none;}
-  .topBar{position:absolute;left:12px;top:12px;right:12px;display:flex;gap:10px;
+  .stage canvas{position:absolute;inset:0;}
+  #overlayCanvas{pointer-events:none;}
+  .overlayBar{position:absolute;left:12px;top:12px;right:12px;display:flex;gap:10px;
     justify-content:space-between;pointer-events:none;}
-  .topBar>*{pointer-events:auto;}
-  .hud{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
-    background:rgba(10,17,26,.86);border:1px solid var(--border);border-radius:14px;padding:7px 12px;}
-  .hud span{color:var(--muted);font-size:12px;}
-  .hud b{color:var(--text);font-weight:600;}
+  .overlayBar>*{pointer-events:auto;}
+  .readout{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+    background:rgba(255,255,255,.94);border:1px solid var(--c-line);
+    border-radius:14px;padding:7px 12px;box-shadow:var(--c-shadow);}
+  .readout span{color:var(--c-ink-soft);font-size:12px;}
+  .readout b{color:var(--c-ink);font-weight:600;}
 
-  .legend{position:absolute;right:12px;bottom:12px;width:250px;
-    background:rgba(10,17,26,.92);border:1px solid var(--border);border-radius:14px;padding:10px 12px;}
-  .legend h3{margin:0 0 7px;font-size:12.5px;color:#d8e6ff;}
-  .legRow{display:flex;gap:9px;align-items:center;margin:5px 0;}
-  .legBox{width:15px;height:15px;border-radius:4px;border:1px solid rgba(255,255,255,.22);flex:0 0 auto;}
-  .legTxt{color:var(--muted);font-size:11.5px;}
+  .keyPanel{position:absolute;right:12px;bottom:12px;width:250px;
+    background:rgba(255,255,255,.96);border:1px solid var(--c-line);
+    border-radius:14px;padding:10px 12px;box-shadow:var(--c-shadow);}
+  .keyPanel h3{margin:0 0 7px;font-size:12.5px;color:var(--c-heading);}
+  .keyRow{display:flex;gap:9px;align-items:center;margin:5px 0;}
+  .keySwatch{width:15px;height:15px;border-radius:4px;border:1px solid rgba(0,0,0,.18);flex:0 0 auto;}
+  .keyLabel{color:var(--c-ink-soft);font-size:11.5px;}
 
   #tooltip{position:fixed;z-index:99;display:none;max-width:330px;
-    background:rgba(10,17,26,.96);border:1px solid var(--border);border-radius:11px;
-    padding:9px 11px;font-size:12px;line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,.5);}
-  #tooltip b{color:#fff}
+    background:rgba(255,255,255,.98);border:1px solid var(--c-line);border-radius:11px;
+    padding:9px 11px;font-size:12px;line-height:1.5;box-shadow:0 10px 30px rgba(24,32,48,.18);}
+  #tooltip b{color:#000}
 
   .drop{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-    background:rgba(8,14,22,.86);z-index:50;border:3px dashed var(--accent);border-radius:8px;}
+    background:rgba(255,255,255,.90);z-index:50;border:3px dashed var(--c-accent);border-radius:8px;}
   .drop.on{display:flex;}
-  .drop div{font-size:17px;color:#cfe3ff;}
+  .drop div{font-size:17px;color:var(--c-heading);}
 
   /* 只有窗口真的很窄时才把面板挪到地图上方（嵌进程序窗口时区域本来就小，
      阈值放低一点，免得动不动就上下堆叠） */
   @media (max-width:720px){
-    .app{grid-template-columns:1fr;grid-template-rows:auto 1fr;}
-    .side{max-height:38vh;overflow:auto;}
-    .legend{display:none;}
+    .shell{grid-template-columns:1fr;grid-template-rows:auto 1fr;}
+    .sidebar{max-height:38vh;overflow:auto;}
+    .keyPanel{display:none;}
   }
 </style>
 </head>
 <body>
-<div class="app" id="app">
-  <div class="side">
-    <div class="brand">
-      <h1>区块清理范围预览<span class="badge">B42</span></h1>
-      <div class="tiny" id="brandHint">配合「区块清理器.exe」使用：先跑一次清理器生成
+<div class="shell" id="app">
+  <div class="sidebar">
+    <div class="masthead">
+      <h1>区块清理范围预览<span class="tag">B42</span></h1>
+      <div class="note" id="mastheadHint">配合「区块清理器.exe」使用：先跑一次清理器生成
         <b>save_index.json</b>，在这里核对哪些区块会被删除。</div>
     </div>
 
-    <div class="sec">
+    <div class="block">
       <h2>1) 载入数据</h2>
-      <div class="row">
-        <button class="primary" id="btnLoad">载入 save_index.json</button>
+      <div class="ctlRow">
+        <button class="actGo" id="btnLoad">载入 save_index.json</button>
         <button id="btnDemo" title="载入程序自带的示例数据">示例</button>
       </div>
-      <div class="hint" id="loadInfo">也可以把 save_index.json 直接拖到页面上。</div>
+      <div class="tipbox" id="loadInfo">也可以把 save_index.json 直接拖到页面上。</div>
     </div>
 
-    <div class="sec">
+    <div class="block">
       <h2>2) 清理结果</h2>
-      <div class="stat"><span>已生成区块</span><b class="c-blue" id="statTotal">0</b></div>
-      <div class="stat"><span>保留（安全屋）</span><b class="c-green" id="statKeep">0</b></div>
-      <div class="stat"><span>将被删除</span><b class="c-red" id="statDel">0</b></div>
-      <div class="stat"><span>安全屋数量</span><b id="statSh">0</b></div>
-      <div class="stat"><span>存档</span><b class="tiny" id="statSave" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">-</b></div>
-      <div class="hint" id="statWarn"></div>
+      <div class="stat"><span>已生成区块</span><b class="c-blue" id="sumProduced">0</b></div>
+      <div class="stat"><span>保留（安全屋）</span><b class="c-green" id="sumRetained">0</b></div>
+      <div class="stat"><span>将被删除</span><b class="c-red" id="sumPending">0</b></div>
+      <div class="stat"><span>安全屋数量</span><b id="sumSafehouse">0</b></div>
+      <div class="stat"><span>存档</span><b class="note" id="sumSaveRoot" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">-</b></div>
+      <div class="tipbox" id="sumNotice"></div>
     </div>
 
-    <div class="sec">
+    <div class="block">
       <h2>3) 视图</h2>
-      <div class="row">
+      <div class="ctlRow">
         <label>网格</label>
-        <select id="gridSize">
+        <select id="gridStep">
           <option value="300" selected>300 格（城镇级）</option>
           <option value="150">150 格</option>
           <option value="50">50 格</option>
@@ -129,72 +146,72 @@
         </select>
         <label>底图</label><input type="checkbox" id="chkMap" checked/>
       </div>
-      <div class="row">
+      <div class="ctlRow">
         <label>显示已生成</label><input type="checkbox" id="chkPop" checked/>
         <label>显示安全屋</label><input type="checkbox" id="chkSH" checked/>
       </div>
-      <div class="row">
-        <label>底图锚点 TR</label><input type="text" id="lockTR" value="19797,0" style="width:100px"/>
-        <label>BL</label><input type="text" id="lockBL" value="0,15897" style="width:100px"/>
+      <div class="ctlRow">
+        <label>底图锚点 TR</label><input type="text" id="anchorNE" value="19797,0" style="width:100px"/>
+        <label>BL</label><input type="text" id="anchorSW" value="0,15897" style="width:100px"/>
       </div>
-      <div class="tiny">底图 map.jpg 与网页同目录，可自行替换。锚点是世界方格坐标，
+      <div class="note">底图 map.jpg 与网页同目录，可自行替换。锚点是世界方格坐标，
         换地图或加了地图包需要重新校准（现用底图：1 像素 = 1 世界格的原版地图渲染，已配准）。
         网格只影响网格线，颜色叠加层最细按 1 个区块（8 格）统计。</div>
-      <div class="row"><button id="btnResetView">回到全图</button></div>
+      <div class="ctlRow"><button id="btnFitAll">回到全图</button></div>
     </div>
 
-    <div class="sec">
+    <div class="block">
       <h2>4) 额外保护区（可选）</h2>
-      <div class="hint">清理器只保护安全屋。想额外保住某个基地 / 公共仓库时：
+      <div class="tipbox">清理器只保护安全屋。想额外保住某个基地 / 公共仓库时：
 <span class="kbd">Shift</span> + 拖拽 = 加一块保护区
 <span class="kbd">Ctrl+Shift</span> + 拖拽 = 减去一块
 <span class="kbd">右键</span> 框内 = 删掉该框
 <span class="kbd">退格</span> = 撤销上一块</div>
-      <div class="row">
-        <button class="primary" id="btnSaveKeep">导出 keep.json</button>
-        <button id="btnLoadKeep">载入 keep.json</button>
-        <button class="danger" id="btnClearKeep">清空</button>
+      <div class="ctlRow">
+        <button class="actGo" id="btnKeepExport">导出 keep.json</button>
+        <button id="btnKeepImport">载入 keep.json</button>
+        <button class="actRisky" id="btnKeepReset">清空</button>
       </div>
-      <div class="hint" id="keepInfo">导出的 keep.json 放到 <b>exe 同目录</b>，清理器会自动读取。</div>
+      <div class="tipbox" id="keepInfo">导出的 keep.json 放到 <b>exe 同目录</b>，清理器会自动读取。</div>
     </div>
 
-    <div class="sec">
+    <div class="block">
       <h2>操作</h2>
-      <div class="hint">拖拽 = 平移　滚轮 = 缩放
+      <div class="tipbox">拖拽 = 平移　滚轮 = 缩放
 悬停安全屋 = 查看屋主 / 城镇 / 成员</div>
     </div>
   </div>
 
-  <div class="main">
-    <div class="canvasWrap"><canvas id="c"></canvas><canvas id="d"></canvas></div>
+  <div class="viewport">
+    <div class="stage"><canvas id="baseCanvas"></canvas><canvas id="overlayCanvas"></canvas></div>
 
-    <div class="topBar">
-      <div class="hud">
-        <span>缩放 <b id="hudZoom">1.00</b></span>
-        <span>中心 <b id="hudCenter">0,0</b></span>
-        <span>坐标 <b id="hudXY">–</b></span>
-        <span>区块 <b id="hudBin">–</b></span>
-        <span>叠加粒度 <b id="hudFine">300 格</b></span>
-        <span>瓦片 <b id="hudTile">–</b></span>
+    <div class="overlayBar">
+      <div class="readout">
+        <span>缩放 <b id="hudScale">1.00</b></span>
+        <span>中心 <b id="hudFocus">0,0</b></span>
+        <span>坐标 <b id="hudCursor">–</b></span>
+        <span>区块 <b id="hudCursorBin">–</b></span>
+        <span>叠加粒度 <b id="hudGrain">300 格</b></span>
+        <span>瓦片 <b id="hudTiles">–</b></span>
       </div>
-      <div class="hud">
-        <span id="hudTip">拖拽平移 · 滚轮缩放 · Shift 拖拽加保护区</span>
+      <div class="readout">
+        <span id="hudHelp">拖拽平移 · 滚轮缩放 · Shift 拖拽加保护区</span>
         <button id="btnToggleSide" title="收起左侧控制面板，把地方全留给地图">收起面板</button>
       </div>
     </div>
 
-    <div class="legend">
+    <div class="keyPanel">
       <h3>图例</h3>
-      <div class="legRow"><div class="legBox" style="background:rgba(87,166,255,.25)"></div>
-        <div class="legTxt">已生成区块（存档里有数据）</div></div>
-      <div class="legRow"><div class="legBox" style="background:rgba(61,220,132,.30)"></div>
-        <div class="legTxt">保留（安全屋保护范围）</div></div>
-      <div class="legRow"><div class="legBox" style="background:rgba(255,80,80,.28)"></div>
-        <div class="legTxt">将被删除</div></div>
-      <div class="legRow"><div class="legBox" style="background:transparent;border:2px dashed rgba(61,220,132,.75)"></div>
-        <div class="legTxt">安全屋矩形</div></div>
-      <div class="legRow"><div class="legBox" style="background:transparent;border:2px dashed rgba(255,196,0,.9)"></div>
-        <div class="legTxt">额外保护区（本页框选）</div></div>
+      <div class="keyRow"><div class="keySwatch" style="background:rgba(124,77,196,.25)"></div>
+        <div class="keyLabel">已生成区块（存档里有数据）</div></div>
+      <div class="keyRow"><div class="keySwatch" style="background:rgba(28,125,71,.30)"></div>
+        <div class="keyLabel">保留（安全屋保护范围）</div></div>
+      <div class="keyRow"><div class="keySwatch" style="background:rgba(181,45,45,.28)"></div>
+        <div class="keyLabel">将被删除</div></div>
+      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(28,125,71,.75)"></div>
+        <div class="keyLabel">安全屋矩形</div></div>
+      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(214,140,10,.9)"></div>
+        <div class="keyLabel">额外保护区（本页框选）</div></div>
     </div>
 
     <div class="drop" id="drop"><div>松开鼠标以载入 save_index.json</div></div>
@@ -205,32 +222,33 @@
 
 <script>
 "use strict";
-const $ = (id) => document.getElementById(id);
+const byId = (id) => document.getElementById(id);
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ESC_MAP = new Map([["&","&amp;"],["<","&lt;"],[">","&gt;"],['"',"&quot;"]]);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, ch => ESC_MAP.get(ch));
 const fmt = (n) => Number(n||0).toLocaleString("zh-CN");
 
 /* ---------------- 画布 / 相机 ---------------- */
-const canvas = $("c"), ctx = canvas.getContext("2d");
-const canvas2 = $("d"), ctx2 = canvas2.getContext("2d");   // 上层：光标 / 拖拽框
+const baseCv = byId("baseCanvas"), baseCtx = baseCv.getContext("2d");
+const overlayCv = byId("overlayCanvas"), overlayCtx = overlayCv.getContext("2d");   // 上层：光标 / 拖拽框
 let W=0, H=0, dpr=1;
-let camX=9000, camY=8000, zoom=0.06;
-let panning=false, panStart=null, selecting=null;
-let mouseWorld=null;                 // 光标处的世界坐标（每次重绘时按 mouseScreen 换算）
-let mouseScreen=null;                // 光标在画布内的像素位置，鼠标移出画布则为 null
+let viewX=9000, viewY=8000, scale=0.06;
+let panning=false, panAnchor=null, selecting=null;
+let cursorWorld=null;                 // 光标处的世界坐标（每次重绘时按 cursorPx 换算）
+let cursorPx=null;                // 光标在画布内的像素位置，鼠标移出画布则为 null
 
 function resize(){
   dpr = window.devicePixelRatio || 1;
-  W = canvas.clientWidth; H = canvas.clientHeight;
-  for(const cv of [canvas, canvas2]){
+  W = baseCv.clientWidth; H = baseCv.clientHeight;
+  for(const cv of [baseCv, overlayCv]){
     cv.width = Math.floor(W*dpr); cv.height = Math.floor(H*dpr);
   }
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx2.setTransform(dpr,0,0,dpr,0,0);
+  baseCtx.setTransform(dpr,0,0,dpr,0,0);
+  overlayCtx.setTransform(dpr,0,0,dpr,0,0);
   redraw();
 }
-const w2s = (x,y) => ({x:(x-camX)*zoom + W/2, y:(y-camY)*zoom + H/2});
-const s2w = (x,y) => ({x:(x-W/2)/zoom + camX, y:(y-H/2)/zoom + camY});
+const w2s = (x,y) => ({x:(x-viewX)*scale + W/2, y:(y-viewY)*scale + H/2});
+const s2w = (x,y) => ({x:(x-W/2)/scale + viewX, y:(y-H/2)/scale + viewY});
 
 /* ---------------- 数据 ---------------- */
 const BIN_TILE = 8;            // 1 区块 = 8×8 世界方格（B42）
@@ -240,7 +258,7 @@ let safehouses = [];
 let padTiles = 0;
 let binsTotal = 0, keepTotal = 0, delTotal = 0;
 
-let gridSize = 300;            // 网格线间距（世界方格）；叠加层粒度见 overlayStep
+let gridStep = 300;            // 网格线间距（世界方格）；叠加层粒度见 overlayStep
 // 叠加层：按 cx 分桶，桶内 cy 有序，绘制时只遍历视野内的格子（大地图才不卡）
 let overlayStep = 300;
 let cxList = [];               // 已排序的 cx
@@ -261,15 +279,15 @@ function lowerBound(arr, v){
 /* ---------------- 载入索引 ---------------- */
 function ingest(j){
   if(!j || typeof j !== "object") throw new Error("文件内容不是 JSON 对象");
-  if(!j.bins_by_x) throw new Error("缺少 bins_by_x 字段，可能不是本工具的索引文件");
+  if(!j.cells_by_x) throw new Error("缺少 cells_by_x 字段，可能不是本工具的索引文件");
 
-  BIN_OVERRIDE = Number(j.bin_tile_size) || 8;
+  CELL_SPAN = Number(j.cell_tiles) || 8;
   binsByX = [];
-  for(const k of Object.keys(j.bins_by_x)){
+  for(const k of Object.keys(j.cells_by_x)){
     const bx = Number(k);
     if(!Number.isFinite(bx)) continue;
     const rs = [];
-    for(const r of (j.bins_by_x[k] || [])){
+    for(const r of (j.cells_by_x[k] || [])){
       if(Array.isArray(r) && r.length >= 2){
         const a = Number(r[0]), b = Number(r[1]);
         if(Number.isFinite(a) && Number.isFinite(b) && b >= a) rs.push([a|0, b|0]);
@@ -280,7 +298,7 @@ function ingest(j){
   binsByX.sort((p,q) => p[0]-q[0]);
 
   protectedByX = new Map();
-  const pb = j.protected_bins || {};
+  const pb = j.protected_cells || {};
   for(const k of Object.keys(pb)){
     const bx = Number(k);
     if(!Number.isFinite(bx)) continue;
@@ -297,7 +315,7 @@ function ingest(j){
   }
 
   safehouses = Array.isArray(j.safehouses) ? j.safehouses : [];
-  padTiles = Number(j.pad_tiles) || 0;
+  padTiles = Number(j.pad) || 0;
   keepRects = Array.isArray(j.extra_rects)
     ? j.extra_rects.filter(r => Array.isArray(r) && r.length >= 4)
         .map(r => ({x1:+r[0], y1:+r[1], x2:+r[2], y2:+r[3]}))
@@ -308,28 +326,28 @@ function ingest(j){
 
   buildOverlay();
 
-  $("statTotal").textContent = fmt(binsTotal);
-  $("statSh").textContent = fmt(safehouses.length);
-  $("statSave").textContent = j.save_root || "-";
+  byId("sumProduced").textContent = fmt(binsTotal);
+  byId("sumSafehouse").textContent = fmt(safehouses.length);
+  byId("sumSaveRoot").textContent = j.save_root || "-";
   const s = j.summary || {};
-  $("statKeep").textContent = fmt(s.keep ?? keepTotal);
-  $("statDel").textContent  = fmt(s.delete ?? delTotal);
-  $("loadInfo").textContent = "已载入" + (j.generated_at ? "（生成于 " + j.generated_at + "）" : "");
-  $("statWarn").textContent = safehouses.length === 0
+  byId("sumRetained").textContent = fmt(s.keep ?? keepTotal);
+  byId("sumPending").textContent  = fmt(s.delete ?? delTotal);
+  byId("loadInfo").textContent = "已载入" + (j.generated_at ? "（生成于 " + j.generated_at + "）" : "");
+  byId("sumNotice").textContent = safehouses.length === 0
     ? "⚠ 索引里没有任何安全屋，清理器会拒绝执行删除。"
     : (padTiles ? "缓冲 " + padTiles + " 格已计入保留范围。" : "");
   fitView();
   redraw();
 }
 
-let BIN_OVERRIDE = 8;
-const binSize = () => BIN_OVERRIDE || 8;
+let CELL_SPAN = 8;
+const cellSpan = () => CELL_SPAN || 8;
 
 /** 某个区块是否受保护：索引里的安全屋范围 + 本页框选的额外保护区 */
 function isProtected(bx, by, protSet){
   if(protSet && protSet.has(by)) return true;
   if(keepRects.length){
-    const bs = binSize(), x0 = bx*bs, y0 = by*bs;
+    const bs = cellSpan(), x0 = bx*bs, y0 = by*bs;
     for(let i=0;i<keepRects.length;i++){
       const r = keepRects[i];
       if(x0 + bs > Math.min(r.x1,r.x2) && x0 < Math.max(r.x1,r.x2) &&
@@ -344,8 +362,8 @@ function isProtected(bx, by, protSet){
  * 粒度 overlayStep = max(网格, 8)：叠加层最细就是一个区块（数据本身也只到区块级）。
  */
 function buildOverlay(){
-  overlayStep = Math.max(gridSize, 8);
-  const bs = binSize(), g = overlayStep;
+  overlayStep = Math.max(gridStep, 8);
+  const bs = cellSpan(), g = overlayStep;
   const acc = new Map();                    // cx -> Map(cy -> [已生成数, 受保护数])
   let del = 0, keep = 0, mx = 1;
 
@@ -389,22 +407,22 @@ function buildOverlay(){
   cxList.sort((a,b) => a-b);
   cellMax = mx;
   keepTotal = keep; delTotal = del;
-  $("statKeep").textContent = fmt(keep);
-  $("statDel").textContent = fmt(del);
+  byId("sumRetained").textContent = fmt(keep);
+  byId("sumPending").textContent = fmt(del);
 }
 
 /* ---------------- 视图 ---------------- */
 function fitView(){
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-  const bs = binSize();
+  const bs = cellSpan();
   for(const [bx,rs] of binsByX){
     minX = Math.min(minX, bx*bs);
     maxX = Math.max(maxX, (bx+1)*bs);
     for(const [a,b] of rs){ minY = Math.min(minY,a*bs); maxY = Math.max(maxY,(b+1)*bs); }
   }
-  if(!Number.isFinite(minX)){ camX=9000; camY=8000; zoom=0.06; return; }
-  camX = (minX+maxX)/2; camY = (minY+maxY)/2;
-  zoom = clamp(Math.min(W/(maxX-minX+2000), H/(maxY-minY+2000)), 0.01, 8);
+  if(!Number.isFinite(minX)){ viewX=9000; viewY=8000; scale=0.06; return; }
+  viewX = (minX+maxX)/2; viewY = (minY+maxY)/2;
+  scale = clamp(Math.min(W/(maxX-minX+2000), H/(maxY-minY+2000)), 0.01, 8);
 }
 
 /* ---------------- 底图：总览图 + 瓦片金字塔 ----------------
@@ -424,7 +442,7 @@ mapImg.onload = () => { mapReady = true; draw(); };
 mapImg.onerror = () => { mapErr = true; draw(); };
 mapImg.src = "map.jpg";
 
-const parseXY = (s) => {
+const readAnchor = (s) => {
   const m = String(s||"").split(",").map(t => Number(t.trim()));
   return (m.length === 2 && m.every(Number.isFinite)) ? {x:m[0], y:m[1]} : null;
 };
@@ -465,7 +483,7 @@ function requestTile(L, tx, ty){
 /** 把视野内的瓦片画上去；没到位的块先空着（下面有 map.jpg 垫底） */
 function drawTileLayer(tl, br){
   if(!tilesEnabled) return 0;
-  const L = tileLevelFor(zoom), step = TILE << L;
+  const L = tileLevelFor(scale), step = TILE << L;
   const tx0 = Math.floor(tl.x/step), tx1 = Math.floor((br.x-1e-6)/step);
   const ty0 = Math.floor(tl.y/step), ty1 = Math.floor((br.y-1e-6)/step);
   let n = 0;
@@ -478,7 +496,7 @@ function drawTileLayer(tl, br){
         const wWorld = img.naturalWidth  << L;
         const hWorld = img.naturalHeight << L;
         const a = w2s(tx*step, ty*step), b = w2s(tx*step + wWorld, ty*step + hWorld);
-        ctx.drawImage(img, a.x, a.y, b.x-a.x, b.y-a.y);
+        baseCtx.drawImage(img, a.x, a.y, b.x-a.x, b.y-a.y);
         n++;
       } else {
         requestTile(L, tx, ty);
@@ -490,42 +508,42 @@ function drawTileLayer(tl, br){
 
 /* ---------------- 绘制 ---------------- */
 function draw(){
-  ctx.clearRect(0,0,W,H);
-  const bs = binSize();
+  baseCtx.clearRect(0,0,W,H);
+  const bs = cellSpan();
   // 光标世界坐标：每次重绘都换算一次，平移/缩放后读数不会过期
-  mouseWorld = mouseScreen ? s2w(mouseScreen.x, mouseScreen.y) : null;
+  cursorWorld = cursorPx ? s2w(cursorPx.x, cursorPx.y) : null;
 
   const tl = s2w(0,0), br = s2w(W,H);
 
   // 底图：先铺一张总览图（秒出、垫底），再把视野内的瓦片叠上去（全分辨率）
-  if($("chkMap").checked){
+  if(byId("chkMap").checked){
     if(mapReady){
-      const tr = parseXY($("lockTR").value), bl = parseXY($("lockBL").value);
+      const tr = readAnchor(byId("anchorNE").value), bl = readAnchor(byId("anchorSW").value);
       if(tr && bl){
         const p = w2s(bl.x, tr.y), q = w2s(tr.x, bl.y);
-        ctx.globalAlpha = 0.85;
-        ctx.drawImage(mapImg, p.x, p.y, q.x-p.x, q.y-p.y);
-        ctx.globalAlpha = 1;
+        baseCtx.globalAlpha = 0.85;
+        baseCtx.drawImage(mapImg, p.x, p.y, q.x-p.x, q.y-p.y);
+        baseCtx.globalAlpha = 1;
       }
     } else if(mapErr){
-      ctx.fillStyle = "rgba(255,80,80,.15)"; ctx.fillRect(12,60,430,44);
-      ctx.fillStyle = "#ffd0d0";
-      ctx.fillText("未找到 map.jpg（把它放在本网页同目录即可）", 24, 87);
+      baseCtx.fillStyle = "rgba(181,45,45,.15)"; baseCtx.fillRect(12,60,430,44);
+      baseCtx.fillStyle = "#8f2020";
+      baseCtx.fillText("未找到 map.jpg（把它放在本网页同目录即可）", 24, 87);
     }
-    const tlvl = tileLevelFor(zoom);
+    const tlvl = tileLevelFor(scale);
     const n = drawTileLayer(tl, br);
-    $("hudTile").textContent = tilesEnabled
+    byId("hudTiles").textContent = tilesEnabled
       ? (n ? `L${tlvl} ×${n}` : "加载中")
       : "无（用总览图）";
   }
 
   // 已生成 / 保留 / 删除 叠加
-  if($("chkPop").checked){
+  if(byId("chkPop").checked){
     overlayDrawn = (overlayStep >= 50) ? drawCells(tl, br) : drawBins(tl, br);
   } else {
     overlayDrawn = 0;
   }
-  $("hudFine").textContent = (overlayStep < 50) ? "区块级" : (overlayStep + " 格");
+  byId("hudGrain").textContent = (overlayStep < 50) ? "区块级" : (overlayStep + " 格");
 
   // 网格线
   drawGrid(tl, br);
@@ -534,31 +552,31 @@ function draw(){
   for(const r of keepRects){
     const p = w2s(Math.min(r.x1,r.x2), Math.min(r.y1,r.y2));
     const q = w2s(Math.max(r.x1,r.x2), Math.max(r.y1,r.y2));
-    ctx.fillStyle = "rgba(255,196,0,.14)";
-    ctx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
-    ctx.strokeStyle = "rgba(255,196,0,.90)";
-    ctx.setLineDash([6,4]); ctx.lineWidth = 2;
-    ctx.strokeRect(p.x,p.y,q.x-p.x,q.y-p.y);
+    baseCtx.fillStyle = "rgba(214,140,10,.14)";
+    baseCtx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
+    baseCtx.strokeStyle = "rgba(214,140,10,.90)";
+    baseCtx.setLineDash([6,4]); baseCtx.lineWidth = 2;
+    baseCtx.strokeRect(p.x,p.y,q.x-p.x,q.y-p.y);
   }
-  ctx.setLineDash([]);
+  baseCtx.setLineDash([]);
 
   // 安全屋轮廓
-  if($("chkSH").checked && safehouses.length){
+  if(byId("chkSH").checked && safehouses.length){
     const pad = padTiles|0;
-    ctx.strokeStyle = "rgba(61,220,132,.75)";
-    ctx.setLineDash([6,4]); ctx.lineWidth = 2;
+    baseCtx.strokeStyle = "rgba(28,125,71,.75)";
+    baseCtx.setLineDash([6,4]); baseCtx.lineWidth = 2;
     for(const sh of safehouses){
       if(sh.x+sh.w < tl.x || sh.x > br.x || sh.y+sh.h < tl.y || sh.y > br.y) continue;
       const a = w2s(sh.x, sh.y), b = w2s(sh.x+sh.w, sh.y+sh.h);
-      ctx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
+      baseCtx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
       if(pad > 0){
         const a2 = w2s(sh.x-pad, sh.y-pad), b2 = w2s(sh.x+sh.w+pad, sh.y+sh.h+pad);
-        ctx.strokeStyle = "rgba(61,220,132,.30)";
-        ctx.strokeRect(a2.x, a2.y, b2.x-a2.x, b2.y-a2.y);
-        ctx.strokeStyle = "rgba(61,220,132,.75)";
+        baseCtx.strokeStyle = "rgba(28,125,71,.30)";
+        baseCtx.strokeRect(a2.x, a2.y, b2.x-a2.x, b2.y-a2.y);
+        baseCtx.strokeStyle = "rgba(28,125,71,.75)";
       }
     }
-    ctx.setLineDash([]);
+    baseCtx.setLineDash([]);
   }
 }
 
@@ -589,23 +607,23 @@ function drawCells(tl, br){
   for(let b=0;b<NB;b++){
     const p = delB[b];
     if(p.length){
-      ctx.fillStyle = `rgba(255,80,80,${(0.07 + 0.23*(b+1)/NB).toFixed(3)})`;
-      ctx.beginPath();
+      baseCtx.fillStyle = `rgba(181,45,45,${(0.07 + 0.23*(b+1)/NB).toFixed(3)})`;
+      baseCtx.beginPath();
       for(let i=0;i<p.length;i+=2){
         const a = w2s(p[i], p[i+1]), q = w2s(p[i]+g, p[i+1]+g);
-        ctx.rect(a.x, a.y, q.x-a.x, q.y-a.y);
+        baseCtx.rect(a.x, a.y, q.x-a.x, q.y-a.y);
       }
-      ctx.fill();
+      baseCtx.fill();
     }
     const q2 = keepB[b];
     if(q2.length){
-      ctx.fillStyle = `rgba(61,220,132,${(0.14 + 0.30*(b+1)/NB).toFixed(3)})`;
-      ctx.beginPath();
+      baseCtx.fillStyle = `rgba(28,125,71,${(0.14 + 0.30*(b+1)/NB).toFixed(3)})`;
+      baseCtx.beginPath();
       for(let i=0;i<q2.length;i+=2){
         const a = w2s(q2[i], q2[i+1]), q = w2s(q2[i]+g, q2[i+1]+g);
-        ctx.rect(a.x, a.y, q.x-a.x, q.y-a.y);
+        baseCtx.rect(a.x, a.y, q.x-a.x, q.y-a.y);
       }
-      ctx.fill();
+      baseCtx.fill();
     }
   }
   return n;
@@ -613,7 +631,7 @@ function drawCells(tl, br){
 
 /** 区块级叠加层：直接画真实存在的 .bin（视野裁剪 + 二分定位） */
 function drawBins(tl, br){
-  const bs = binSize();
+  const bs = cellSpan();
   const cap = 60000;
   const bx0 = Math.floor(tl.x/bs), bx1 = Math.floor(br.x/bs);
   let lo = 0, hi = binsByX.length;
@@ -640,83 +658,83 @@ function drawBins(tl, br){
 
   const batch = (arr, style) => {
     if(!arr.length) return;
-    ctx.fillStyle = style;
-    ctx.beginPath();
+    baseCtx.fillStyle = style;
+    baseCtx.beginPath();
     for(let i=0;i<arr.length;i+=2){
       const p = w2s(arr[i], arr[i+1]), q = w2s(arr[i]+bs, arr[i+1]+bs);
-      ctx.rect(p.x, p.y, Math.max(1, q.x-p.x), Math.max(1, q.y-p.y));
+      baseCtx.rect(p.x, p.y, Math.max(1, q.x-p.x), Math.max(1, q.y-p.y));
     }
-    ctx.fill();
+    baseCtx.fill();
   };
-  batch(delP, "rgba(255,80,80,0.28)");
-  batch(keepP, "rgba(61,220,132,0.30)");
+  batch(delP, "rgba(181,45,45,0.28)");
+  batch(keepP, "rgba(28,125,71,0.30)");
   return n;
 }
 
 /** 网格线：太密（屏幕间距过小）就不画，避免 1 格网格把浏览器拖死 */
 function drawGrid(tl, br){
-  const g = gridSize;
-  if(g * zoom < 3.5) return;
-  ctx.strokeStyle = "rgba(255,255,255,.055)"; ctx.lineWidth = 1;
-  ctx.beginPath();
+  const g = gridStep;
+  if(g * scale < 3.5) return;
+  baseCtx.strokeStyle = "rgba(0,0,0,.10)"; baseCtx.lineWidth = 1;
+  baseCtx.beginPath();
   const gx0 = Math.floor(tl.x/g)*g, gy0 = Math.floor(tl.y/g)*g;
   for(let x=gx0; x<=br.x; x+=g){
     const p = w2s(x,tl.y), q = w2s(x,br.y);
-    ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y);
+    baseCtx.moveTo(p.x,p.y); baseCtx.lineTo(q.x,q.y);
   }
   for(let y=gy0; y<=br.y; y+=g){
     const p = w2s(tl.x,y), q = w2s(br.x,y);
-    ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y);
+    baseCtx.moveTo(p.x,p.y); baseCtx.lineTo(q.x,q.y);
   }
-  ctx.stroke();
+  baseCtx.stroke();
 }
 
 /* ---------------- 上层：光标 / 拖拽框 / 读数（鼠标一动只重画这一层） ---------------- */
 function drawTop(){
-  ctx2.clearRect(0,0,W,H);
-  mouseWorld = mouseScreen ? s2w(mouseScreen.x, mouseScreen.y) : null;
+  overlayCtx.clearRect(0,0,W,H);
+  cursorWorld = cursorPx ? s2w(cursorPx.x, cursorPx.y) : null;
 
   // 命中的安全屋（悬停高亮）
   hoverSH = null;
-  if($("chkSH").checked && mouseWorld){
+  if(byId("chkSH").checked && cursorWorld){
     const pad = padTiles|0;
     for(const sh of safehouses){
-      if(mouseWorld.x >= sh.x-pad && mouseWorld.x <= sh.x+sh.w+pad &&
-         mouseWorld.y >= sh.y-pad && mouseWorld.y <= sh.y+sh.h+pad){ hoverSH = sh; break; }
+      if(cursorWorld.x >= sh.x-pad && cursorWorld.x <= sh.x+sh.w+pad &&
+         cursorWorld.y >= sh.y-pad && cursorWorld.y <= sh.y+sh.h+pad){ hoverSH = sh; break; }
     }
   }
   if(hoverSH){
     const a = w2s(hoverSH.x, hoverSH.y), b = w2s(hoverSH.x+hoverSH.w, hoverSH.y+hoverSH.h);
-    ctx2.fillStyle = "rgba(61,220,132,.14)";
-    ctx2.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
+    overlayCtx.fillStyle = "rgba(28,125,71,.14)";
+    overlayCtx.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
   }
 
   // 正在拖拽的保护区
   if(selecting){
     const p = w2s(Math.min(selecting.x1, selecting.x2), Math.min(selecting.y1, selecting.y2));
     const q = w2s(Math.max(selecting.x1, selecting.x2), Math.max(selecting.y1, selecting.y2));
-    ctx2.fillStyle = "rgba(255,196,0,.14)";
-    ctx2.fillRect(p.x, p.y, q.x-p.x, q.y-p.y);
-    ctx2.strokeStyle = "rgba(255,196,0,.95)";
-    ctx2.setLineDash([6,4]); ctx2.lineWidth = 2;
-    ctx2.strokeRect(p.x, p.y, q.x-p.x, q.y-p.y);
-    ctx2.setLineDash([]);
+    overlayCtx.fillStyle = "rgba(214,140,10,.14)";
+    overlayCtx.fillRect(p.x, p.y, q.x-p.x, q.y-p.y);
+    overlayCtx.strokeStyle = "rgba(214,140,10,.95)";
+    overlayCtx.setLineDash([6,4]); overlayCtx.lineWidth = 2;
+    overlayCtx.strokeRect(p.x, p.y, q.x-p.x, q.y-p.y);
+    overlayCtx.setLineDash([]);
   }
 
   // 光标十字，方便对准
-  if(mouseScreen && !panning){
-    ctx2.strokeStyle = "rgba(255,255,255,.35)";
-    ctx2.lineWidth = 1;
-    ctx2.beginPath();
-    ctx2.moveTo(mouseScreen.x-7, mouseScreen.y+0.5);
-    ctx2.lineTo(mouseScreen.x+7, mouseScreen.y+0.5);
-    ctx2.moveTo(mouseScreen.x+0.5, mouseScreen.y-7);
-    ctx2.lineTo(mouseScreen.x+0.5, mouseScreen.y+7);
-    ctx2.stroke();
+  if(cursorPx && !panning){
+    overlayCtx.strokeStyle = "rgba(0,0,0,.45)";
+    overlayCtx.lineWidth = 1;
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(cursorPx.x-7, cursorPx.y+0.5);
+    overlayCtx.lineTo(cursorPx.x+7, cursorPx.y+0.5);
+    overlayCtx.moveTo(cursorPx.x+0.5, cursorPx.y-7);
+    overlayCtx.lineTo(cursorPx.x+0.5, cursorPx.y+7);
+    overlayCtx.stroke();
   }
 
-  $("hudZoom").textContent = zoom.toFixed(2);
-  $("hudCenter").textContent = Math.round(camX) + "," + Math.round(camY);
+  byId("hudScale").textContent = scale.toFixed(2);
+  byId("hudFocus").textContent = Math.round(viewX) + "," + Math.round(viewY);
   updateCoordHud();
 }
 
@@ -725,7 +743,7 @@ function redraw(){ draw(); drawTop(); }
 
 /* ---------------- 坐标读数 ---------------- */
 function updateCoordHud(){
-  const xy = $("hudXY"), bn = $("hudBin");
+  const xy = byId("hudCursor"), bn = byId("hudCursorBin");
   if(selecting){                       // 正在框选：显示选区范围与尺寸
     const x1 = Math.round(Math.min(selecting.x1, selecting.x2));
     const y1 = Math.round(Math.min(selecting.y1, selecting.y2));
@@ -735,15 +753,15 @@ function updateCoordHud(){
     bn.textContent = "–";
     return;
   }
-  if(!mouseWorld){ xy.textContent = "–"; bn.textContent = "–"; return; }
-  const tx = Math.floor(mouseWorld.x), ty = Math.floor(mouseWorld.y);
-  const b = binSize();
+  if(!cursorWorld){ xy.textContent = "–"; bn.textContent = "–"; return; }
+  const tx = Math.floor(cursorWorld.x), ty = Math.floor(cursorWorld.y);
+  const b = cellSpan();
   xy.textContent = `${tx},${ty}`;
   bn.textContent = `${Math.floor(tx/b)}/${Math.floor(ty/b)}`;
 }
 
 /* ---------------- 鼠标 ---------------- */
-const tooltip = $("tooltip");
+const tooltip = byId("tooltip");
 function showTip(px, py, html){
   tooltip.innerHTML = html;
   tooltip.style.display = "block";
@@ -753,13 +771,13 @@ function showTip(px, py, html){
   tooltip.style.top  = clamp(py+14, 8, window.innerHeight-r.height-8) + "px";
 }
 
-canvas.addEventListener("contextmenu", e => e.preventDefault());
+baseCv.addEventListener("contextmenu", e => e.preventDefault());
 
-canvas.addEventListener("mousedown", e => {
-  const r = canvas.getBoundingClientRect();
+baseCv.addEventListener("mousedown", e => {
+  const r = baseCv.getBoundingClientRect();
   const sx = e.clientX-r.left, sy = e.clientY-r.top;
   const w = s2w(sx, sy);
-  mouseScreen = {x:sx, y:sy};
+  cursorPx = {x:sx, y:sy};
 
   if(e.button === 2){
     for(let i=keepRects.length-1; i>=0; i--){
@@ -785,18 +803,18 @@ canvas.addEventListener("mousedown", e => {
     }
     buildOverlay(); redraw(); refreshKeepInfo(); return;
   }
-  panning = true; panStart = {sx, sy, camX, camY};
+  panning = true; panAnchor = {sx, sy, viewX, viewY};
 });
 
-canvas.addEventListener("mousemove", e => {
-  const r = canvas.getBoundingClientRect();
+baseCv.addEventListener("mousemove", e => {
+  const r = baseCv.getBoundingClientRect();
   const sx = e.clientX-r.left, sy = e.clientY-r.top;
   const w = s2w(sx, sy);
-  mouseScreen = {x:sx, y:sy};
+  cursorPx = {x:sx, y:sy};
 
-  if(panning && panStart){
-    camX = panStart.camX - (sx-panStart.sx)/zoom;
-    camY = panStart.camY - (sy-panStart.sy)/zoom;
+  if(panning && panAnchor){
+    viewX = panAnchor.viewX - (sx-panAnchor.sx)/scale;
+    viewY = panAnchor.viewY - (sy-panAnchor.sy)/scale;
     tooltip.style.display = "none";
     redraw(); return;
   }
@@ -819,7 +837,7 @@ canvas.addEventListener("mousemove", e => {
   }
 });
 
-canvas.addEventListener("mouseup", () => {
+baseCv.addEventListener("mouseup", () => {
   if(selecting){
     const r = keepRects;
     if(Math.abs(selecting.x2-selecting.x1) >= 4 && Math.abs(selecting.y2-selecting.y1) >= 4){
@@ -828,23 +846,23 @@ canvas.addEventListener("mouseup", () => {
     selecting = null;
     refreshKeepInfo(); buildOverlay(); redraw(); return;
   }
-  panning = false; panStart = null;
+  panning = false; panAnchor = null;
 });
 
-canvas.addEventListener("mouseleave", () => {
-  mouseScreen = null;
+baseCv.addEventListener("mouseleave", () => {
+  cursorPx = null;
   tooltip.style.display = "none";
   drawTop();
 });
 
-canvas.addEventListener("wheel", e => {
+baseCv.addEventListener("wheel", e => {
   e.preventDefault();
-  const r = canvas.getBoundingClientRect();
+  const r = baseCv.getBoundingClientRect();
   const ax = e.clientX-r.left, ay = e.clientY-r.top;
   const before = s2w(ax, ay);
-  zoom = clamp(zoom * Math.exp(-e.deltaY*0.0012), 0.01, 8);
+  scale = clamp(scale * Math.exp(-e.deltaY*0.0012), 0.01, 8);
   const after = s2w(ax, ay);
-  camX += before.x-after.x; camY += before.y-after.y;
+  viewX += before.x-after.x; viewY += before.y-after.y;
   redraw();
 }, {passive:false});
 
@@ -856,7 +874,7 @@ window.addEventListener("keydown", e => {
 
 /* ---------------- 额外保护区导出 ---------------- */
 function refreshKeepInfo(){
-  $("keepInfo").textContent = keepRects.length
+  byId("keepInfo").textContent = keepRects.length
     ? `已框选 ${keepRects.length} 块额外保护区，导出后放到 exe 同目录。`
     : "导出的 keep.json 放到 exe 同目录，清理器会自动读取。";
 }
@@ -879,7 +897,7 @@ function collectKeepRects(){
   ]);
 }
 
-$("btnSaveKeep").onclick = async () => {
+byId("btnKeepExport").onclick = async () => {
   if(!keepRects.length){ alert("还没有框选任何额外保护区。按住 Shift 拖拽即可添加。"); return; }
   const rects = collectKeepRects();
   const payload = {
@@ -895,16 +913,16 @@ $("btnSaveKeep").onclick = async () => {
       });
       const j = await r.json();
       if(!j.ok) throw new Error(j.error || ("HTTP " + r.status));
-      $("keepInfo").textContent = `✓ 已保存 ${rects.length} 块到清理器，窗口那边会自动重新分析。`;
+      byId("keepInfo").textContent = `✓ 已保存 ${rects.length} 块到清理器，窗口那边会自动重新分析。`;
       return;
     }catch(err){
-      $("keepInfo").textContent = "存回清理器失败（" + err.message + "），改为下载文件。";
+      byId("keepInfo").textContent = "存回清理器失败（" + err.message + "），改为下载文件。";
     }
   }
   download("keep.json", JSON.stringify(payload, null, 2));
 };
 
-$("btnLoadKeep").onclick = () => pickFile(".json", txt => {
+byId("btnKeepImport").onclick = () => pickFile(".json", txt => {
   try{
     const j = JSON.parse(txt);
     const rs = Array.isArray(j) ? j : (j.rects || []);
@@ -914,7 +932,7 @@ $("btnLoadKeep").onclick = () => pickFile(".json", txt => {
   }catch(err){ alert("keep.json 解析失败：" + err.message); }
 });
 
-$("btnClearKeep").onclick = () => { keepRects = []; refreshKeepInfo(); buildOverlay(); redraw(); };
+byId("btnKeepReset").onclick = () => { keepRects = []; refreshKeepInfo(); buildOverlay(); redraw(); };
 
 /* ---------------- 载入 ---------------- */
 function pickFile(accept, cb){
@@ -927,34 +945,34 @@ function pickFile(accept, cb){
   inp.click();
 }
 
-$("btnLoad").onclick = () => pickFile(".json", txt => {
+byId("btnLoad").onclick = () => pickFile(".json", txt => {
   try{ ingest(JSON.parse(txt)); }
-  catch(err){ $("loadInfo").textContent = "载入失败：" + err.message; }
+  catch(err){ byId("loadInfo").textContent = "载入失败：" + err.message; }
 });
 
-$("btnDemo").onclick = () => {
+byId("btnDemo").onclick = () => {
   // 简易示例：一小片已生成区块 + 一个安全屋，方便先熟悉界面
   const demo = {
     version:1, generated_at:"示例数据", save_root:"（示例）",
-    bin_tile_size:8, pad_tiles:0,
-    bins_by_x:{}, safehouses:[
+    cell_tiles:8, pad:0,
+    cells_by_x:{}, safehouses:[
       {x:9801,y:9087,w:36,h:32,owner:"示例屋主",town:"Muldraugh, KY",name:"示例安全屋",members:["小明","老王"]}
     ],
-    protected_bins:{}, extra_rects:[],
+    protected_cells:{}, extra_rects:[],
     summary:{}
   };
   const pb = {};
   for(let bx=1225; bx<=1229; bx++){
-    demo.bins_by_x[bx] = [[1135,1139]];
+    demo.cells_by_x[bx] = [[1135,1139]];
     pb[bx] = [1135,1136,1137,1138,1139];
   }
-  for(let bx=1180; bx<=1260; bx += 4) demo.bins_by_x[bx] = [[1100,1200]];
-  demo.protected_bins = pb;
+  for(let bx=1180; bx<=1260; bx += 4) demo.cells_by_x[bx] = [[1100,1200]];
+  demo.protected_cells = pb;
   ingest(demo);
 };
 
 /* 拖拽载入 */
-const drop = $("drop");
+const drop = byId("drop");
 window.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("on"); });
 window.addEventListener("dragleave", e => { if(e.clientX===0 && e.clientY===0) drop.classList.remove("on"); });
 window.addEventListener("drop", e => {
@@ -963,31 +981,31 @@ window.addEventListener("drop", e => {
   if(!f) return;
   f.text().then(txt => {
     try{ ingest(JSON.parse(txt)); }
-    catch(err){ $("loadInfo").textContent = "载入失败：" + err.message; }
+    catch(err){ byId("loadInfo").textContent = "载入失败：" + err.message; }
   });
 });
 
 /* ---------------- 控件 ---------------- */
-$("gridSize").onchange = () => {
-  gridSize = Number($("gridSize").value) || 300;
+byId("gridStep").onchange = () => {
+  gridStep = Number(byId("gridStep").value) || 300;
   buildOverlay(); redraw();
 };
-$("chkMap").onchange = () => redraw();
-$("chkPop").onchange = () => redraw();
-$("chkSH").onchange = () => redraw();
-$("lockTR").onchange = () => redraw();
-$("lockBL").onchange = () => redraw();
-$("btnResetView").onclick = () => { fitView(); redraw(); };
+byId("chkMap").onchange = () => redraw();
+byId("chkPop").onchange = () => redraw();
+byId("chkSH").onchange = () => redraw();
+byId("anchorNE").onchange = () => redraw();
+byId("anchorSW").onchange = () => redraw();
+byId("btnFitAll").onclick = () => { fitView(); redraw(); };
 
 /* 收起/展开左侧面板：窗口小的时候把地方全留给地图（状态记在本地） */
 const SIDE_KEY = "pz_cleaner_side_collapsed";
 function applySide(collapsed){
-  $("app").classList.toggle("collapsed", collapsed);
-  $("btnToggleSide").textContent = collapsed ? "展开面板" : "收起面板";
+  byId("app").classList.toggle("collapsed", collapsed);
+  byId("btnToggleSide").textContent = collapsed ? "展开面板" : "收起面板";
   try{ localStorage.setItem(SIDE_KEY, collapsed ? "1" : "0"); }catch(e){}
   setTimeout(resize, 30);        // 布局变了，画布要重新量尺寸
 }
-$("btnToggleSide").onclick = () => applySide(!$("app").classList.contains("collapsed"));
+byId("btnToggleSide").onclick = () => applySide(!byId("app").classList.contains("collapsed"));
 try{ if(localStorage.getItem(SIDE_KEY) === "1") applySide(true); }catch(e){}
 window.addEventListener("resize", resize);
 
@@ -999,15 +1017,15 @@ resize();
    并且能把框选的保护区直接存回清理器，不用手动选文件 / 搬 keep.json。 */
 async function bootServed(){
   if(!SERVED) return;
-  $("brandHint").innerHTML =
+  byId("mastheadHint").innerHTML =
     "已连接 <b>区块清理器</b> 内置预览服务（只监听本机）。下面的数据是当前这次分析的结果，改动会自动同步。";
-  $("btnLoad").textContent = "重新载入";
-  $("btnSaveKeep").textContent = "保存到清理器";
+  byId("btnLoad").textContent = "重新载入";
+  byId("btnKeepExport").textContent = "保存到清理器";
   try{
     const r = await fetch("api/state", {cache:"no-store"});
     const st = await r.json();
     if(!st.analyzed){
-      $("loadInfo").textContent = "清理器那边还没分析过：回到窗口点「① 分析」，然后刷新本页。";
+      byId("loadInfo").textContent = "清理器那边还没分析过：回到窗口点「① 分析」，然后刷新本页。";
       return;
     }
   }catch(e){ /* 服务不可用就走下面的载入兜底 */ }
@@ -1015,9 +1033,9 @@ async function bootServed(){
     const r = await fetch("save_index.json", {cache:"no-store"});
     if(!r.ok) throw new Error("HTTP " + r.status);
     ingest(await r.json());
-    $("loadInfo").textContent = "已自动载入当前分析结果。";
+    byId("loadInfo").textContent = "已自动载入当前分析结果。";
   }catch(err){
-    $("loadInfo").textContent = "还没拿到分析结果（" + err.message + "）：回到清理器点「① 分析」后刷新本页。";
+    byId("loadInfo").textContent = "还没拿到分析结果（" + err.message + "）：回到清理器点「① 分析」后刷新本页。";
   }
 }
 bootServed();
