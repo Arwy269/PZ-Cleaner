@@ -1,13 +1,17 @@
-// 验证「实时坐标」读数：用最小 DOM 桩跑 index.html 的脚本，模拟鼠标事件后检查 HUD 文本
+// 网页核心逻辑回归测试：坐标读数 / 网格粒度 / 渲染分层
+// 用最小 DOM 桩直接跑 index.html 里的脚本，不需要浏览器： node _test/coord_test.js
 const fs = require("fs");
 const vm = require("vm");
 
 const html = fs.readFileSync(__dirname + "/../web/index.html", "utf8");
 const code = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
+let baseCalls = 0, topCalls = 0;      // 两个画布的绘制调用计数
 const nodes = {};
 function mkNode(id) {
   const listeners = {};
+  const counter = id === "c" ? () => baseCalls++ : (id === "d" ? () => topCalls++ : null);
+  const ctxStub = new Proxy({}, { get: (t, k) => (typeof k === "string" ? () => { if (counter) counter(); } : undefined) });
   return nodes[id] = {
     id, textContent: "", innerHTML: "", value: "", checked: true, style: {},
     listeners,
@@ -15,10 +19,10 @@ function mkNode(id) {
     addEventListener(t, fn){ (listeners[t] = listeners[t] || []).push(fn); },
     click(){}, getBoundingClientRect: () => ({width:0,height:0,left:0,top:0}),
     clientWidth: 1600, clientHeight: 900,
-    getContext: () => new Proxy({}, { get: () => () => {} }),
+    getContext: () => ctxStub,
   };
 }
-["c","btnLoad","btnDemo","loadInfo","statTotal","statKeep","statDel","statSh","statSave","statWarn",
+["c","d","btnLoad","btnDemo","loadInfo","statTotal","statKeep","statDel","statSh","statSave","statWarn",
  "gridSize","chkMap","chkPop","chkSH","lockTR","lockBL","btnResetView","btnSaveKeep","btnLoadKeep",
  "btnClearKeep","keepInfo","hudZoom","hudCenter","hudXY","hudBin","hudFine","hudTip","tooltip","drop"]
  .forEach(mkNode);
@@ -26,7 +30,8 @@ nodes["gridSize"].value = "300";
 
 global.document = { getElementById: (id) => nodes[id] || mkNode(id), createElement: () => mkNode("tmp"), addEventListener(){} };
 global.window = { addEventListener(){}, devicePixelRatio: 1, innerWidth: 1600, innerHeight: 900 };
-global.Image = function(){ return {}; };
+const imgs = [];
+global.Image = function(){ const o = {src:"", naturalWidth:0, onload:null, onerror:null}; imgs.push(o); return o; };
 global.alert = () => {};
 global.URL.createObjectURL = () => "blob:x";
 
@@ -45,44 +50,155 @@ const check = (label, ok, extra="") => {
 
 ingest({
   version:1, bin_tile_size:8, pad_tiles:0, save_root:"测试",
-  bins_by_x:{"1500":[[1250,1260]]},
+  bins_by_x:{"1500":[[1250,1260]], "1501":[[1250,1260]]},
   safehouses:[{x:12000,y:10000,w:20,h:20,owner:"A",town:"X, KY",name:"",members:[]}],
-  protected_bins:{}, extra_rects:[], summary:{total:11,keep:0,delete:11}
+  protected_bins:{"1500":[[1250,1255]]}, extra_rects:[], summary:{total:22,keep:0,delete:22}
 });
-check("载入后画布已重绘（HUD 已刷新）", nodes["hudCenter"].textContent !== "0,0" && nodes["hudCenter"].textContent !== "");
+check("载入后画布已重绘", nodes["hudCenter"].textContent !== "0,0");
 
-// 1) 画面正中央 → 世界坐标 = 相机中心
+// ---- 坐标读数 ----
 move(800, 450);
 let [mx, my] = xy();
 let [cx, cy] = center();
-check("中心点坐标 = 相机中心 x", Math.abs(mx - cx) <= 1, `hudXY=${mx},${my} hudCenter=${cx},${cy}`);
-check("中心点坐标 = 相机中心 y", Math.abs(my - cy) <= 1, `hudXY=${mx},${my} hudCenter=${cx},${cy}`);
+check("中心点坐标 = 相机中心", Math.abs(mx-cx) <= 1 && Math.abs(my-cy) <= 1, `hudXY=${mx},${my} center=${cx},${cy}`);
 check("区块号 = 世界坐标 ÷ 8", nodes["hudBin"].textContent === `${Math.floor(mx/8)}/${Math.floor(my/8)}`,
-      `区块=${nodes["hudBin"].textContent} 坐标=${mx},${my}`);
+      `区块=${nodes["hudBin"].textContent}`);
 
-// 两次读数都是向下取整，差值允许 ±1 的取整误差（zoom 显示只保留两位小数，再放宽 1）
 const zoom = parseFloat(nodes["hudZoom"].textContent);
 move(960, 450);
-let [mx2] = xy();
-check(`右移 160px (zoom=${zoom}) 对应约 ${Math.round(160/zoom)} 格`, Math.abs((mx2 - mx) - 160/zoom) <= 2, `实测增量 ${mx2-mx}`);
+check(`右移 160px 对应约 ${Math.round(160/zoom)} 格`, Math.abs((xy()[0]-mx) - 160/zoom) <= 2, `实测 ${xy()[0]-mx}`);
 
-// 3) 移出画布 → 清空
 fire("c", "mouseleave", {});
-check("鼠标移出画布后显示 –", nodes["hudXY"].textContent === "–" && nodes["hudBin"].textContent === "–");
+check("移出画布后显示 –", nodes["hudXY"].textContent === "–" && nodes["hudBin"].textContent === "–");
 
-// 4) 滚轮缩放后不移动鼠标，读数也要跟着刷新
 move(800, 450);
 fire("c", "wheel", {clientX:800, clientY:450, deltaY:-600, preventDefault(){}});
-let [ax] = xy(); let [ncx] = center();
-check("缩放后读数跟随新相机中心", Math.abs(ax - ncx) <= 1, `hudXY=${ax} hudCenter=${ncx}`);
+check("缩放后读数跟随新相机中心", Math.abs(xy()[0] - center()[0]) <= 1);
 
-// 5) 拖动保护区时显示选区范围
+// ---- 选区拖动 ----
 fire("c", "mousedown", {clientX:800, clientY:450, button:0, shiftKey:true, ctrlKey:false, metaKey:false, preventDefault(){}});
 fire("c", "mousemove", {clientX:900, clientY:500, button:0, shiftKey:true, ctrlKey:false, metaKey:false, preventDefault(){}});
-check("拖动时显示选区范围与尺寸", /→.*×.*格/.test(nodes["hudXY"].textContent), `实际=${nodes["hudXY"].textContent}`);
+check("拖动时显示选区范围与尺寸", /→.*×.*格/.test(nodes["hudXY"].textContent), nodes["hudXY"].textContent);
 fire("c", "mouseup", {});
-check("松手后恢复为光标坐标", /^\d+,\d+$/.test(nodes["hudXY"].textContent), `实际=${nodes["hudXY"].textContent}`);
+check("松手后恢复为光标坐标", /^\d+,\d+$/.test(nodes["hudXY"].textContent), nodes["hudXY"].textContent);
 check("松手后保留了一块保护区", nodes["keepInfo"].textContent.includes("1 块"), nodes["keepInfo"].textContent);
+
+// ---- 网格粒度：1 格网格不能把叠加层也变成 1 格 ----
+check("默认 300 格网格 → 叠加层 300 格", nodes["hudFine"].textContent === "300 格", nodes["hudFine"].textContent);
+nodes["gridSize"].value = "8"; nodes["gridSize"].onchange();
+check("选 8 格 → 叠加层降到区块级", nodes["hudFine"].textContent === "区块级", nodes["hudFine"].textContent);
+nodes["gridSize"].value = "1"; nodes["gridSize"].onchange();
+check("选 1 格 → 叠加层仍是区块级（不会炸）", nodes["hudFine"].textContent === "区块级", nodes["hudFine"].textContent);
+nodes["gridSize"].value = "50"; nodes["gridSize"].onchange();
+check("选 50 格 → 叠加层 50 格", nodes["hudFine"].textContent === "50 格", nodes["hudFine"].textContent);
+
+// ---- 渲染分层：鼠标移动只能重画上层 ----
+nodes["gridSize"].value = "300"; nodes["gridSize"].onchange();
+baseCalls = 0; topCalls = 0;
+for(let i=0;i<40;i++) move(200+i*5, 300);
+check("40 次鼠标移动没有重画底层画布", baseCalls === 0, `底层被调用 ${baseCalls} 次`);
+check("40 次鼠标移动重画了上层画布", topCalls > 0, `上层 ${topCalls} 次`);
+
+baseCalls = 0;
+fire("c", "wheel", {clientX:800, clientY:450, deltaY:-200, preventDefault(){}});
+check("缩放会重画底层", baseCalls > 0, `底层 ${baseCalls} 次`);
+
+// ---- 第 2 阶段：瓦片底图（用全新上下文，避免被第一阶段的状态干扰）----
+{
+  const imgs = [];
+  const N = {};
+  const drawCalls = [];
+  let base2 = 0;
+  const mk2 = (id) => {
+    const L = {};
+    const ctxStub = new Proxy({}, { get: (t,k) => {
+      if (k === "drawImage") return (...a) => drawCalls.push(a);
+      return () => { if(id==="c") base2++; };
+    }});
+    return N[id] = { id, textContent:"", innerHTML:"", value:"", checked:true, style:{}, listeners:L,
+      classList:{add(){},remove(){}}, addEventListener(t,f){ (L[t]=L[t]||[]).push(f); },
+      click(){}, getBoundingClientRect:()=>({width:0,height:0,left:0,top:0}),
+      clientWidth:1600, clientHeight:900, getContext:()=>ctxStub };
+  };
+  ["c","d","gridSize","chkMap","chkPop","chkSH","lockTR","lockBL","tooltip","drop","keepInfo",
+   "statTotal","statKeep","statDel","statSh","statSave","statWarn","hudZoom","hudCenter","hudXY",
+   "hudBin","hudFine","hudTile","hudTip","loadInfo","btnResetView"].forEach(mk2);
+  N["gridSize"].value = "300";
+  const sandbox = {
+    document: { getElementById: id => N[id] || mk2(id), createElement: () => mk2("t"), addEventListener(){} },
+    window: { addEventListener(){}, devicePixelRatio:1, innerWidth:1600, innerHeight:900 },
+    Image: function(){ const o = {src:"", naturalWidth:0, onload:null, onerror:null}; imgs.push(o); return o; },
+    alert(){}, URL: { createObjectURL: () => "x" }, console, requestAnimationFrame: f => f(),
+    Math, Number, Object, Array, String, JSON, Set, Map, Int32Array, Promise,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox, {filename:"page2"});
+  sandbox.ingest({version:1, bin_tile_size:8, pad_tiles:0, save_root:"t",
+    bins_by_x:{"1500":[[1250,1260]]}, safehouses:[], protected_bins:{}, extra_rects:[], summary:{}});
+
+  const fire2 = (t, ev) => (N["c"].listeners[t]||[]).forEach(f => f(ev));
+  const wheel = (d) => fire2("wheel", {clientX:800, clientY:450, deltaY:d, preventDefault(){}});
+  const levels = () => imgs.map(o => o.src).filter(u => u.startsWith("tiles/"))
+                             .map(u => Number(u.split("/")[1]));
+  for(let i=0;i<60;i++) wheel(-200);           // 一路放大到上限
+  const lvls = levels();
+  const snapL0 = imgs.filter(o => o.src.startsWith("tiles/0/"));   // 全分辨率那一轮请求的块
+  check("放大到上限后请求全分辨率瓦片（第 0 级）", lvls.length > 0 && Math.min(...lvls) === 0,
+        `级别集合 ${[...new Set(lvls)].sort().join(",")}`);
+  check("只请求视野内的瓦片（不是上千块）", lvls.length > 0 && lvls.length <= 60, `实际 ${lvls.length} 块`);
+  const urls = imgs.map(o => o.src).filter(u => u.startsWith("tiles/"));
+  check("同一块瓦片不重复请求", new Set(urls).size === urls.length, `${urls.length} 次 / ${new Set(urls).size} 个不同`);
+
+  imgs.length = 0;
+  for(let i=0;i<90;i++) wheel(200);            // 缩小回全图
+  const lvlOut = levels();
+  check("缩小后自动换到低级别瓦片", lvlOut.length > 0 && Math.min(...lvlOut) >= 2,
+        `级别集合 ${[...new Set(lvlOut)].sort().join(",")}`);
+
+  // 模拟当前级别的一块瓦片加载完成 → 应该被画到底层
+  const one = [...imgs].reverse().find(o => o.src.startsWith("tiles/"));
+  if(one){
+    one.naturalWidth = 512;
+    one.naturalHeight = 512;
+    one.onload();
+    wheel(0);
+    check("加载完成的瓦片会被画到底层", /×\d+/.test(N["hudTile"].textContent), `HUD=${N["hudTile"].textContent}`);
+  } else {
+    check("加载完成的瓦片会被画到底层", false, "本轮没有瓦片请求");
+  }
+
+  // 边缘的块是不满的（源图切到最后一行/列会剩），必须按实际像素画，不能拉伸
+  {
+    imgs.length = 0; drawCalls.length = 0;
+    for(let i=0;i<80;i++) wheel(-200);              // 回到全分辨率
+    const zNow = parseFloat(N["hudZoom"].textContent);
+    const L = Math.max(0, Math.min(6, Math.round(-Math.log2(Math.max(zNow, 0.002)))));
+    // 直接算出"视野左上角那一块"的编号，确保它就是会被画出来的那块
+    const step = 512 * Math.pow(2, L);
+    const [cxw, cyw] = N["hudCenter"].textContent.split(",").map(Number);
+    const tx = Math.floor((cxw - 800/zNow) / step), ty = Math.floor((cyw - 450/zNow) / step);
+    const want = `tiles/${L}/${tx}_${ty}.jpg`;
+    const t = (L === 0 ? snapL0 : []).find(o => o.src === want);   // 第一批（全分辨率那轮）请求里的
+    if(t){
+      t.naturalWidth = 341; t.naturalHeight = 25;    // 模拟边缘那块（源图右下角切剩的）
+      t.onload();
+      drawCalls.length = 0;
+      wheel(0);
+      const z = parseFloat(N["hudZoom"].textContent);
+      const call = drawCalls.find(a => a[0] === t);
+      if(call){
+        const wantW = 341 * z * Math.pow(2, L), wantH = 25 * z * Math.pow(2, L);
+        check("不满的瓦片按实际像素画（不被拉伸）",
+              Math.abs(call[3] - wantW) < 2 && Math.abs(call[4] - wantH) < 2,
+              `画成 ${call[3].toFixed(0)}×${call[4].toFixed(0)} 屏幕px，应为 ${wantW.toFixed(0)}×${wantH.toFixed(0)}（第 ${L} 级、341×25 像素的块）`);
+      } else {
+        check("不满的瓦片按实际像素画（不被拉伸）", false, `这次重绘没有画该块（L=${L} ${want}）`);
+      }
+    } else {
+      check("不满的瓦片按实际像素画（不被拉伸）", false, `没找到 ${want}`);
+    }
+  }
+}
 
 console.log(bad ? `\n有 ${bad} 项不符` : "\n全部通过");
 process.exit(bad ? 1 : 0);

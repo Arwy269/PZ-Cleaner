@@ -39,6 +39,9 @@ except ImportError:
     print("需要 Pillow：pip install pillow")
     sys.exit(1)
 
+# 世界大图有 3 亿像素，远超 Pillow 默认的 1.79 亿上限（那是防解压炸弹的）
+Image.MAX_IMAGE_PIXELS = None
+
 # pzmap2dzi 投影参数（pzmap.org / pzmap.net 同源）
 X0, Y0, SQR = 1040384.0, -139296.0, 128.0
 WORLD_W, WORLD_H = 19968, 16128          # 世界方格数
@@ -152,15 +155,47 @@ def to_topdown(iso: Image.Image, level: int, out_w: int) -> Image.Image:
                          resample=Image.BICUBIC, fillcolor=(0, 0, 0))
 
 
+def from_local_image(path: Path, crop: str, out_w: int, quality: int, out_path: Path) -> int:
+    """
+    用本地大图生成底图。约定：图内 1 像素 = 1 世界格，内容左上角 = 世界坐标 (0,0)。
+    （new\\Map.png / new\\world.png 都符合这个约定，已用配准验证：k=1.0000、偏移 0。）
+    """
+    x0, y0, x1, y1 = (int(v) for v in crop.split(","))
+    im = Image.open(path).convert("RGB").crop((x0, y0, x1, y1))
+    w, h = im.size
+    print(f"  源图 {path.name}: 内容 {w}×{h} 像素 = 世界 ({x0},{y0}) 起的 {w}×{h} 格")
+    out_h = round(h * out_w / w)
+    print(f"  缩放 → {out_w}×{out_h}  ({out_w/WORLD_W:.3f} 像素/格)")
+    im = im.resize((out_w, out_h), Image.LANCZOS)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    im.save(out_path, "JPEG", quality=quality, optimize=True, progressive=True)
+    mb = out_path.stat().st_size / 1048576
+    print(f"\n已写出 {out_path}  ({out_w}×{out_h}, {mb:.1f} MB)")
+    print(f"网页锚点应为： TR = {x0+w},{y0}   BL = {x0},{y0+h}")
+    print(f"（解码后约需内存 {out_w*out_h*4/1048576:.0f} MB）")
+    return 0
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="从 pzmap.org 生成网页正投影底图")
-    ap.add_argument("--level", type=int, default=15, help="瓦片级别 8~17（越大越清晰，默认 15）")
-    ap.add_argument("--width", type=int, default=6144, help="输出图宽度（默认 6144）")
-    ap.add_argument("--quality", type=int, default=84, help="JPEG 质量（默认 84）")
+    ap = argparse.ArgumentParser(description="生成网页正投影底图")
+    ap.add_argument("--from-image", help="用本地大图（1 像素 = 1 世界格，内容左上角 = 世界 0,0）")
+    ap.add_argument("--crop", default="0,0,19797,15897", help="--from-image 时截取的内容区域 x0,y0,x1,y1")
+    ap.add_argument("--level", type=int, default=15, help="pzmap 瓦片级别 8~17（越大越清晰，默认 15）")
+    ap.add_argument("--width", type=int, default=8192, help="输出图宽度（默认 8192）")
+    ap.add_argument("--quality", type=int, default=85, help="JPEG 质量（默认 85）")
     ap.add_argument("--out", default=str(WEB / "map.jpg"), help="输出路径")
     ap.add_argument("--workers", type=int, default=4, help="并发下载数")
     ap.add_argument("--no-cache", action="store_true", help="不保留瓦片缓存")
     args = ap.parse_args()
+
+    if args.from_image:
+        p = Path(args.from_image)
+        if not p.is_absolute():
+            p = HERE.parent / p
+        if not p.is_file():
+            print(f"找不到源图：{p}")
+            return 1
+        return from_local_image(p, args.crop, args.width, args.quality, Path(args.out))
 
     if not (8 <= args.level <= 17):
         print("级别建议 8~17：太小不清晰，太大（≥18）会占用几个 GB 内存。")

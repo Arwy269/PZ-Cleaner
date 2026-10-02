@@ -1,4 +1,4 @@
-# 僵毁安全屋清理器（PZ Safehouse Cleaner）
+# 僵毁区块清理器（PZ Chunk Cleaner）
 
 在 Project Zomboid **Build 42** 专用服务器存档上，**删除除安全屋范围以外的所有区块文件**
 （`map/<X>/<Y>.bin`），服务器重启后这些区域按地图包重新生成——地形、建筑、战利品、丧尸全部刷新，
@@ -13,7 +13,7 @@
 
 ## 一、快速开始（服务器上）
 
-1. 把 `安全屋清理器.exe` 和 `一键清理.bat` 放到**同一个文件夹**。
+1. 把 `区块清理器.exe` 和 `一键清理.bat` 放到**同一个文件夹**。
 2. **先关闭僵尸毁灭工程服务器**（关掉服务器进程/窗口）。
 3. 双击 `一键清理.bat`，按提示选择存档。
 4. 程序会列出：多少个区块、多少个安全屋、保留多少、删除多少。
@@ -24,10 +24,10 @@
 命令行用法（可选）：
 
 ```
-安全屋清理器.exe "D:\Zomboid\Saves\Multiplayer\servertest"   # 指定存档
-安全屋清理器.exe --dry                                       # 只分析，不删除
-安全屋清理器.exe --list                                      # 只列出安全屋
-安全屋清理器.exe --pad 20 --backup-dir "E:\PZ备份"           # 外扩 20 格 + 备份到 E 盘
+区块清理器.exe "D:\Zomboid\Saves\Multiplayer\servertest"   # 指定存档
+区块清理器.exe --dry                                       # 只分析，不删除
+区块清理器.exe --list                                      # 只列出安全屋
+区块清理器.exe --pad 20 --backup-dir "E:\PZ备份"           # 外扩 20 格 + 备份到 E 盘
 ```
 
 | 参数 | 说明 |
@@ -81,7 +81,7 @@
 运行时目录：
 
 ```
-安全屋清理器.exe
+区块清理器.exe
 一键清理.bat
 config.json          # 运行时生成
 keep.json            # 可选：网页导出的额外保护区
@@ -99,8 +99,15 @@ web\                 # 首次运行自动释放：index.html + map.jpg + save_in
 - **左上角实时显示光标处的坐标**：`坐标` = 世界方格（和游戏内坐标一致），`区块` = 世界坐标 ÷ 8 的区块号；
   平移/缩放时读数会跟着刷新，鼠标移出画布显示 `–`，框选时改为显示选区的范围与尺寸
 - 绿色虚线 = 安全屋矩形，悬停可看屋主 / 城镇 / 成员
-- 底图是 `map.jpg`（B42 官方地图渲染图，和网页同目录，可自行替换）
-- 底图对不齐时改左上角的 `TR` / `BL` 世界坐标锚点
+- **底图**是 8192×6578 的**正投影俯视图**（北在上）+ 一整套瓦片金字塔，由 `new\Map.png` 生成——
+  1 像素 = 1 世界格的原版地图渲染，已配准；放大后自动换成全分辨率瓦片（见下面"底图"一节）
+- 底图对不齐时改左上角的 `TR` / `BL` 世界坐标锚点（当前底图对应 `19797,0` / `0,15897`）
+- **网格**下拉只影响网格线，`1 格 / 8 格（区块）/ 50 / 150 / 300`；
+  颜色叠加层最细按 1 个区块统计（存档数据本身就只到区块级）
+
+> 性能：底图和叠加层画在底层画布，光标十字/拖拽框画在上层。**鼠标移动只重画上层**，
+> 平移缩放才重画底层；叠加层只遍历视野内的格子。实测 116 万区块的存档：
+> 载入 41 ms、缩放时每帧 0.2~4.6 ms。
 
 **想额外保住某个基地/公共仓库**：按住 `Shift` 拖拽框选，然后点"导出 keep.json"，
 把文件放到 **exe 同目录**，下次运行清理器会自动把这块也算进保护范围。
@@ -136,22 +143,61 @@ web\                 # 首次运行自动释放：index.html + map.jpg + save_in
 
 ```
 new\
-├── pz_safehouse_cleaner.py   # 后端（纯标准库，无第三方依赖）
+├── pz_chunk_cleaner.py   # 后端（纯标准库，无第三方依赖）
 ├── web\index.html            # 汉化网页预览（内置到 exe）
-├── web\map.jpg               # 底图（内置到 exe）
-├── 安全屋清理器.spec         # PyInstaller 配置
+├── web\map.jpg               # 底图总览（内置到 exe）
+├── web\tiles\                # 瓦片金字塔 1677 块 24.7 MB（随文件夹分发，不打进 exe）
+├── tools\make_tiles.py       # 瓦片生成脚本
+├── Map.png / world.png       # 底图源图（1 像素 = 1 世界格，不会打进 exe）
+├── tools\make_basemap.py     # 底图生成脚本（从 pzmap.org 拉瓦片重采样，需 Pillow）
+├── _test\coord_test.js       # 网页逻辑回归测试（node _test/coord_test.js）
+├── 区块清理器.spec         # PyInstaller 配置
 ├── 打包.bat                  # 双击打包
 ├── 一键清理.bat              # 双击运行
 └── dist\                     # 打包产物
 ```
 
+### 底图（`web\map.jpg` + `web\tiles\`）
+
+源图是放在 `new\` 的 `Map.png` / `world.png`：**1 像素 = 1 世界格，内容左上角就是世界坐标 (0,0)**。
+这个对应关系不是猜的，是用配准算出来的（与 1:1 世界坐标基准做多尺度互相关，
+结果 k=1.0000 像素/格、偏移 (0,0)，峰值尖锐）；`world.png` 与之坐标完全一致（平移 0,0）。
+
+**为什么要切瓦片**：源图 19797×15897 = 3.15 亿像素，整张解码要占 **1.26 GB 内存**
+（Chrome 的图片上限约 2.68 亿像素，直接超了），所以单张图最多只能压到 8192 宽（0.41 像素/格）。
+切成瓦片后网页只解码视野内的块——**全分辨率 1 像素 = 1 格，内存反而只有几十 MB**。
+
+```
+web\map.jpg            8192×6578 总览图（3.8 MB）：秒出、垫底，瓦片没到位时先顶
+web\tiles\<级别>\<x>_<y>.jpg   金字塔，级别 0 = 全分辨率，共 1677 块 24.7 MB
+```
+
+```bash
+pip install pillow
+
+# 重新生成瓦片（推荐做法）
+python tools/make_tiles.py                             # 从 Map.png，级别 0..6，24.7 MB
+python tools/make_tiles.py --from-image world.png      # 换成地形渲染
+python tools/make_tiles.py --tile 1024 --quality 80    # 块更大 / 压得更狠
+
+# 总览图（一并换掉；瓦片缺失时靠它兜底）
+python tools/make_basemap.py --from-image Map.png --width 8192
+```
+
+网页按缩放级别自动选瓦片（放大到 1:1 时用第 0 级），只请求视野内、每块只请求一次，
+视野外按 LRU 淘汰（上限约 360 块）。**瓦片文件夹不存在也没关系**——自动退到总览图，不会一直刷 404。
+生成后脚本会打印该用的 `TR` / `BL` 锚点（当前是 `19797,0` / `0,15897`）。
+
+> 为什么没用 pzmap.org 的"俯视图"：网站上的 Scheme 俯视模式是浏览器端用矢量数据实时画的，
+> 没有可下载的图片；它唯一的栅格瓦片是 45° 等距渲染，且东侧部分瓦片缺失（404）。
+
 重新打包（需要 `pip install pyinstaller`）：双击 `打包.bat`，或
 
 ```
-python -m PyInstaller --noconfirm --clean 安全屋清理器.spec
+python -m PyInstaller --noconfirm --clean 区块清理器.spec
 ```
 
-开发调试：`python pz_safehouse_cleaner.py --dry`（直接跑源码，不用打包）。
+开发调试：`python pz_chunk_cleaner.py --dry`（直接跑源码，不用打包）。
 
 ---
 
@@ -176,7 +222,7 @@ python -m PyInstaller --noconfirm --clean 安全屋清理器.spec
 `map_meta.bin` 是未公开格式，屋主和坐标可靠，名字和成员是启发式猜的，仅供参考。
 
 **Q: 杀毒软件报警？**
-PyInstaller 打包的 exe 常见误报。可改用源码运行：`python pz_safehouse_cleaner.py`。
+PyInstaller 打包的 exe 常见误报。可改用源码运行：`python pz_chunk_cleaner.py`。
 
 ---
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>僵毁安全屋清理器 · 清理范围预览</title>
+<title>僵毁区块清理器 · 清理范围预览</title>
 <style>
   :root{
     --bg:#0b0f14; --panel:#0f1620; --panel2:#0d131c;
@@ -47,6 +47,10 @@
 
   .canvasWrap{position:absolute;inset:0;}
   canvas{display:block;width:100%;height:100%;}
+  /* 双层画布：底层画地图/叠加/安全屋（只在视图变化时重绘），
+     上层画光标十字与拖拽框（每次鼠标移动重绘，很便宜） */
+  .canvasWrap canvas{position:absolute;inset:0;}
+  #d{pointer-events:none;}
   .topBar{position:absolute;left:12px;top:12px;right:12px;display:flex;gap:10px;
     justify-content:space-between;pointer-events:none;}
   .topBar>*{pointer-events:auto;}
@@ -83,8 +87,8 @@
 <div class="app">
   <div class="side">
     <div class="brand">
-      <h1>安全屋清理范围预览<span class="badge">B42</span></h1>
-      <div class="tiny">配合「安全屋清理器.exe」使用：先跑一次清理器生成
+      <h1>区块清理范围预览<span class="badge">B42</span></h1>
+      <div class="tiny">配合「区块清理器.exe」使用：先跑一次清理器生成
         <b>save_index.json</b>，在这里核对哪些区块会被删除。</div>
     </div>
 
@@ -115,7 +119,8 @@
           <option value="300" selected>300 格（城镇级）</option>
           <option value="150">150 格</option>
           <option value="50">50 格</option>
-          <option value="8">8 格（逐区块）</option>
+          <option value="8">8 格（区块）</option>
+          <option value="1">1 格（精细）</option>
         </select>
         <label>底图</label><input type="checkbox" id="chkMap" checked/>
       </div>
@@ -124,11 +129,12 @@
         <label>显示安全屋</label><input type="checkbox" id="chkSH" checked/>
       </div>
       <div class="row">
-        <label>底图锚点 TR</label><input type="text" id="lockTR" value="19796,4" style="width:100px"/>
-        <label>BL</label><input type="text" id="lockBL" value="0,15899" style="width:100px"/>
+        <label>底图锚点 TR</label><input type="text" id="lockTR" value="19797,0" style="width:100px"/>
+        <label>BL</label><input type="text" id="lockBL" value="0,15897" style="width:100px"/>
       </div>
       <div class="tiny">底图 map.jpg 与网页同目录，可自行替换。锚点是世界方格坐标，
-        换地图或加了地图包需要重新校准。</div>
+        换地图或加了地图包需要重新校准（现用底图：1 像素 = 1 世界格的原版地图渲染，已配准）。
+        网格只影响网格线，颜色叠加层最细按 1 个区块（8 格）统计。</div>
       <div class="row"><button id="btnResetView">回到全图</button></div>
     </div>
 
@@ -155,7 +161,7 @@
   </div>
 
   <div class="main">
-    <div class="canvasWrap"><canvas id="c"></canvas></div>
+    <div class="canvasWrap"><canvas id="c"></canvas><canvas id="d"></canvas></div>
 
     <div class="topBar">
       <div class="hud">
@@ -163,7 +169,8 @@
         <span>中心 <b id="hudCenter">0,0</b></span>
         <span>坐标 <b id="hudXY">–</b></span>
         <span>区块 <b id="hudBin">–</b></span>
-        <span>精细模式 <b id="hudFine">关</b></span>
+        <span>叠加粒度 <b id="hudFine">300 格</b></span>
+        <span>瓦片 <b id="hudTile">–</b></span>
       </div>
       <div class="hud"><span id="hudTip">拖拽平移 · 滚轮缩放 · Shift 拖拽加保护区</span></div>
     </div>
@@ -197,6 +204,7 @@ const fmt = (n) => Number(n||0).toLocaleString("zh-CN");
 
 /* ---------------- 画布 / 相机 ---------------- */
 const canvas = $("c"), ctx = canvas.getContext("2d");
+const canvas2 = $("d"), ctx2 = canvas2.getContext("2d");   // 上层：光标 / 拖拽框
 let W=0, H=0, dpr=1;
 let camX=9000, camY=8000, zoom=0.06;
 let panning=false, panStart=null, selecting=null;
@@ -206,9 +214,12 @@ let mouseScreen=null;                // 光标在画布内的像素位置，鼠�
 function resize(){
   dpr = window.devicePixelRatio || 1;
   W = canvas.clientWidth; H = canvas.clientHeight;
-  canvas.width = Math.floor(W*dpr); canvas.height = Math.floor(H*dpr);
+  for(const cv of [canvas, canvas2]){
+    cv.width = Math.floor(W*dpr); cv.height = Math.floor(H*dpr);
+  }
   ctx.setTransform(dpr,0,0,dpr,0,0);
-  draw();
+  ctx2.setTransform(dpr,0,0,dpr,0,0);
+  redraw();
 }
 const w2s = (x,y) => ({x:(x-camX)*zoom + W/2, y:(y-camY)*zoom + H/2});
 const s2w = (x,y) => ({x:(x-W/2)/zoom + camX, y:(y-H/2)/zoom + camY});
@@ -221,16 +232,23 @@ let safehouses = [];
 let padTiles = 0;
 let binsTotal = 0, keepTotal = 0, delTotal = 0;
 
-let gridSize = 300;
-let popCells = new Map();      // "cx,cy" -> 已生成数
-let keepCells = new Map();     // "cx,cy" -> 受保护数
+let gridSize = 300;            // 网格线间距（世界方格）；叠加层粒度见 overlayStep
+// 叠加层：按 cx 分桶，桶内 cy 有序，绘制时只遍历视野内的格子（大地图才不卡）
+let overlayStep = 300;
+let cxList = [];               // 已排序的 cx
+let byCx = new Map();          // cx -> {cy:Int32Array, pop:Int32Array, keep:Int32Array}
 let cellMax = 1;
+let overlayDrawn = 0;          // 上一帧画了多少个格子/区块（用于提示）
 
 let keepRects = [];            // 额外保护区，世界方格 {x1,y1,x2,y2}
 let hoverSH = null;
-let fineMode = false;
 
-const ck = (a,b) => a + "," + b;
+/** 二分：返回 arr 中第一个 >= v 的下标 */
+function lowerBound(arr, v){
+  let lo = 0, hi = arr.length;
+  while(lo < hi){ const m = (lo + hi) >> 1; if(arr[m] < v) lo = m + 1; else hi = m; }
+  return lo;
+}
 
 /* ---------------- 载入索引 ---------------- */
 function ingest(j){
@@ -280,7 +298,7 @@ function ingest(j){
   binsTotal = 0;
   for(const [,rs] of binsByX) for(const [a,b] of rs) binsTotal += (b-a+1);
 
-  recomputeCells();
+  buildOverlay();
 
   $("statTotal").textContent = fmt(binsTotal);
   $("statSh").textContent = fmt(safehouses.length);
@@ -293,42 +311,75 @@ function ingest(j){
     ? "⚠ 索引里没有任何安全屋，清理器会拒绝执行删除。"
     : (padTiles ? "缓冲 " + padTiles + " 格已计入保留范围。" : "");
   fitView();
-  draw();
+  redraw();
 }
 
 let BIN_OVERRIDE = 8;
 const binSize = () => BIN_OVERRIDE || 8;
 
-function recomputeCells(){
-  const bs = binSize();
-  popCells = new Map(); keepCells = new Map(); cellMax = 1;
-  const g = gridSize;
+/** 某个区块是否受保护：索引里的安全屋范围 + 本页框选的额外保护区 */
+function isProtected(bx, by, protSet){
+  if(protSet && protSet.has(by)) return true;
+  if(keepRects.length){
+    const bs = binSize(), x0 = bx*bs, y0 = by*bs;
+    for(let i=0;i<keepRects.length;i++){
+      const r = keepRects[i];
+      if(x0 + bs > Math.min(r.x1,r.x2) && x0 < Math.max(r.x1,r.x2) &&
+         y0 + bs > Math.min(r.y1,r.y2) && y0 < Math.max(r.y1,r.y2)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 重算颜色叠加层。
+ * 粒度 overlayStep = max(网格, 8)：叠加层最细就是一个区块（数据本身也只到区块级）。
+ */
+function buildOverlay(){
+  overlayStep = Math.max(gridSize, 8);
+  const bs = binSize(), g = overlayStep;
+  const acc = new Map();                    // cx -> Map(cy -> [已生成数, 受保护数])
+  let del = 0, keep = 0, mx = 1;
 
   for(const [bx, rs] of binsByX){
     const prot = protectedByX.get(bx);
     const cx = Math.floor(bx*bs/g);
+    let inner = acc.get(cx);
+    if(!inner){ inner = new Map(); acc.set(cx, inner); }
     for(const [y0,y1] of rs){
       let by = y0;
       while(by <= y1){
         const cy = Math.floor(by*bs/g);
         const nextBy = Math.ceil((cy+1)*g / bs);
         const segEnd = Math.min(y1, nextBy-1);
-        const n = segEnd-by+1;
-        const k = ck(cx,cy);
-        popCells.set(k, (popCells.get(k)||0) + n);
-        if(prot) for(let i=by;i<=segEnd;i++) if(prot.has(i)){
-          keepCells.set(k, (keepCells.get(k)||0) + 1);
+        let cell = inner.get(cy);
+        if(!cell){ cell = [0,0]; inner.set(cy, cell); }
+        cell[0] += (segEnd - by + 1);
+        if(prot || keepRects.length){
+          for(let i=by;i<=segEnd;i++) if(isProtected(bx, i, prot)) cell[1]++;
         }
-        by = segEnd+1;
+        by = segEnd + 1;
       }
     }
   }
-  let del = 0, keep = 0;
-  for(const [k,v] of popCells){
-    const p = keepCells.get(k) || 0;
-    keep += p; del += (v - p);
-    if(v > cellMax) cellMax = v;
+
+  byCx = new Map(); cxList = [];
+  for(const [cx, inner] of acc){
+    const keys = Array.from(inner.keys()).sort((a,b) => a-b);
+    const cyA = Int32Array.from(keys);
+    const popA = new Int32Array(keys.length);
+    const keepA = new Int32Array(keys.length);
+    for(let i=0;i<keys.length;i++){
+      const v = inner.get(keys[i]);
+      popA[i] = v[0]; keepA[i] = v[1];
+      keep += v[1]; del += (v[0] - v[1]);
+      if(v[0] > mx) mx = v[0];
+    }
+    byCx.set(cx, {cy:cyA, pop:popA, keep:keepA});
+    cxList.push(cx);
   }
+  cxList.sort((a,b) => a-b);
+  cellMax = mx;
   keepTotal = keep; delTotal = del;
   $("statKeep").textContent = fmt(keep);
   $("statDel").textContent = fmt(del);
@@ -345,10 +396,21 @@ function fitView(){
   }
   if(!Number.isFinite(minX)){ camX=9000; camY=8000; zoom=0.06; return; }
   camX = (minX+maxX)/2; camY = (minY+maxY)/2;
-  zoom = clamp(Math.min(W/(maxX-minX+2000), H/(maxY-minY+2000)), 0.01, 2.5);
+  zoom = clamp(Math.min(W/(maxX-minX+2000), H/(maxY-minY+2000)), 0.01, 8);
 }
 
-/* ---------------- 底图 ---------------- */
+/* ---------------- 底图：总览图 + 瓦片金字塔 ----------------
+   瓦片按"1 像素 = 1 世界格"的源图切好（tools/make_tiles.py），
+   第 L 级每格占 1/2^L 像素，第 (x,y) 块覆盖世界格 [x*512*2^L, (x+1)*512*2^L)。
+   只加载视野内的块，所以全分辨率也不吃内存。 */
+const TILE = 512;
+const TILE_MAX_L = 6;
+const TILE_CACHE_MAX = 360;          // 每块解码约 1 MB（512²×4），上限约 360 MB
+let tilesEnabled = true;
+const tileCache = new Map();         // "L/x_y" -> Image
+const tileLoading = new Set();
+const tileFailed = new Set();
+
 let mapImg = new Image(), mapReady = false, mapErr = false;
 mapImg.onload = () => { mapReady = true; draw(); };
 mapImg.onerror = () => { mapErr = true; draw(); };
@@ -359,6 +421,65 @@ const parseXY = (s) => {
   return (m.length === 2 && m.every(Number.isFinite)) ? {x:m[0], y:m[1]} : null;
 };
 
+let redrawQueued = false;
+function scheduleRedraw(){          // 瓦片陆续到位时合并重绘，每帧最多一次
+  if(redrawQueued) return;
+  redrawQueued = true;
+  requestAnimationFrame(() => { redrawQueued = false; draw(); });
+}
+
+function tileLevelFor(z){
+  return Math.max(0, Math.min(TILE_MAX_L, Math.round(-Math.log2(Math.max(z, 0.002)))));
+}
+
+function requestTile(L, tx, ty){
+  const key = L + "/" + tx + "_" + ty;
+  if(tileCache.has(key) || tileLoading.has(key) || tileFailed.has(key)) return;
+  tileLoading.add(key);
+  const img = new Image();
+  img.onload = () => {
+    tileLoading.delete(key);
+    tileCache.set(key, img);
+    if(tileCache.size > TILE_CACHE_MAX){        // 简单淘汰：丢掉最早的一批
+      const it = tileCache.keys();
+      for(let i=0;i<80;i++){ const k = it.next().value; if(k !== undefined) tileCache.delete(k); }
+    }
+    scheduleRedraw();
+  };
+  img.onerror = () => {
+    tileLoading.delete(key);
+    tileFailed.add(key);
+    if(!tileCache.size && tileFailed.size > 8) tilesEnabled = false;   // 没有瓦片文件夹，别再试了
+  };
+  img.src = `tiles/${L}/${tx}_${ty}.jpg`;
+}
+
+/** 把视野内的瓦片画上去；没到位的块先空着（下面有 map.jpg 垫底） */
+function drawTileLayer(tl, br){
+  if(!tilesEnabled) return 0;
+  const L = tileLevelFor(zoom), step = TILE << L;
+  const tx0 = Math.floor(tl.x/step), tx1 = Math.floor((br.x-1e-6)/step);
+  const ty0 = Math.floor(tl.y/step), ty1 = Math.floor((br.y-1e-6)/step);
+  let n = 0;
+  for(let ty=ty0; ty<=ty1; ty++){
+    for(let tx=tx0; tx<=tx1; tx++){
+      const img = tileCache.get(L + "/" + tx + "_" + ty);
+      if(img && img.naturalWidth){
+        // 边缘的块是切剩下的，不满 TILE——必须按它的实际像素数算覆盖范围，
+        // 否则最后一行/列会被拉伸（第 L 级 1 像素 = 2^L 个世界格）
+        const wWorld = img.naturalWidth  << L;
+        const hWorld = img.naturalHeight << L;
+        const a = w2s(tx*step, ty*step), b = w2s(tx*step + wWorld, ty*step + hWorld);
+        ctx.drawImage(img, a.x, a.y, b.x-a.x, b.y-a.y);
+        n++;
+      } else {
+        requestTile(L, tx, ty);
+      }
+    }
+  }
+  return n;
+}
+
 /* ---------------- 绘制 ---------------- */
 function draw(){
   ctx.clearRect(0,0,W,H);
@@ -366,86 +487,42 @@ function draw(){
   // 光标世界坐标：每次重绘都换算一次，平移/缩放后读数不会过期
   mouseWorld = mouseScreen ? s2w(mouseScreen.x, mouseScreen.y) : null;
 
-  // 底图
-  if($("chkMap").checked && mapReady){
-    const tr = parseXY($("lockTR").value), bl = parseXY($("lockBL").value);
-    if(tr && bl){
-      const tl = w2s(bl.x, tr.y), br = w2s(tr.x, bl.y);
-      ctx.globalAlpha = 0.85;
-      ctx.drawImage(mapImg, tl.x, tl.y, br.x-tl.x, br.y-tl.y);
-      ctx.globalAlpha = 1;
-    }
-  } else if($("chkMap").checked && mapErr){
-    ctx.fillStyle = "rgba(255,80,80,.15)"; ctx.fillRect(12,60,430,44);
-    ctx.fillStyle = "#ffd0d0";
-    ctx.fillText("未找到 map.jpg（把它放在本网页同目录即可）", 24, 87);
-  }
-
   const tl = s2w(0,0), br = s2w(W,H);
-  const inView = (x,y,w,h) => !(x>br.x || x+w<tl.x || y>br.y || y+h<tl.y);
+
+  // 底图：先铺一张总览图（秒出、垫底），再把视野内的瓦片叠上去（全分辨率）
+  if($("chkMap").checked){
+    if(mapReady){
+      const tr = parseXY($("lockTR").value), bl = parseXY($("lockBL").value);
+      if(tr && bl){
+        const p = w2s(bl.x, tr.y), q = w2s(tr.x, bl.y);
+        ctx.globalAlpha = 0.85;
+        ctx.drawImage(mapImg, p.x, p.y, q.x-p.x, q.y-p.y);
+        ctx.globalAlpha = 1;
+      }
+    } else if(mapErr){
+      ctx.fillStyle = "rgba(255,80,80,.15)"; ctx.fillRect(12,60,430,44);
+      ctx.fillStyle = "#ffd0d0";
+      ctx.fillText("未找到 map.jpg（把它放在本网页同目录即可）", 24, 87);
+    }
+    const tlvl = tileLevelFor(zoom);
+    const n = drawTileLayer(tl, br);
+    $("hudTile").textContent = tilesEnabled
+      ? (n ? `L${tlvl} ×${n}` : "加载中")
+      : "无（用总览图）";
+  }
 
   // 已生成 / 保留 / 删除 叠加
   if($("chkPop").checked){
-    for(const [k,v] of popCells){
-      const [cx,cy] = k.split(",").map(Number);
-      const x = cx*gridSize, y = cy*gridSize;
-      if(!inView(x,y,gridSize,gridSize)) continue;
-      const p = w2s(x,y), q = w2s(x+gridSize,y+gridSize);
-      const kept = keepCells.get(k) || 0;
-      const del = v - kept;
-      if(del > 0){
-        const a = clamp(0.05 + 0.22*(del/cellMax), 0.07, 0.30);
-        ctx.fillStyle = `rgba(255,80,80,${a})`;
-        ctx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
-      }
-      if(kept > 0){
-        const a = clamp(0.12 + 0.30*(kept/cellMax), 0.14, 0.45);
-        ctx.fillStyle = `rgba(61,220,132,${a})`;
-        ctx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
-      }
-    }
+    overlayDrawn = (overlayStep >= 50) ? drawCells(tl, br) : drawBins(tl, br);
+  } else {
+    overlayDrawn = 0;
   }
-
-  // 精细模式：按区块画（放大后才显示）
-  fineMode = false;
-  if($("chkPop").checked && gridSize <= 150 && zoom > 0.35){
-    fineMode = true;
-    let drawn = 0;
-    const cap = 60000;
-    ctx.fillStyle = "rgba(255,80,80,0.30)";
-    for(const [bx, rs] of binsByX){
-      const x0 = bx*bs;
-      if(x0+bs < tl.x) continue;
-      if(x0 > br.x) break;
-      const prot = protectedByX.get(bx);
-      for(const [a,b] of rs){
-        const y0 = Math.max(a, Math.floor(tl.y/bs)), y1 = Math.min(b, Math.ceil(br.y/bs));
-        for(let by=y0; by<=y1; by++){
-          if(prot && prot.has(by)) continue;
-          const p = w2s(x0, by*bs), q = w2s(x0+bs, (by+1)*bs);
-          ctx.fillRect(p.x, p.y, Math.max(1,q.x-p.x), Math.max(1,q.y-p.y));
-          if(++drawn > cap) break;
-        }
-        if(drawn > cap) break;
-      }
-      if(drawn > cap) break;
-    }
-  }
-  $("hudFine").textContent = fineMode ? "开" : "关";
+  $("hudFine").textContent = (overlayStep < 50) ? "区块级" : (overlayStep + " 格");
 
   // 网格线
-  ctx.strokeStyle = "rgba(255,255,255,.055)"; ctx.lineWidth = 1;
-  const gx0 = Math.floor(tl.x/gridSize)*gridSize, gy0 = Math.floor(tl.y/gridSize)*gridSize;
-  for(let x=gx0; x<=br.x; x+=gridSize){
-    const p = w2s(x,tl.y), q = w2s(x,br.y);
-    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
-  }
-  for(let y=gy0; y<=br.y; y+=gridSize){
-    const p = w2s(tl.x,y), q = w2s(br.x,y);
-    ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke();
-  }
+  drawGrid(tl, br);
 
-  // 额外保护区
+  // 额外保护区（只画描边，填充交给上层的高亮）
   for(const r of keepRects){
     const p = w2s(Math.min(r.x1,r.x2), Math.min(r.y1,r.y2));
     const q = w2s(Math.max(r.x1,r.x2), Math.max(r.y1,r.y2));
@@ -457,28 +534,17 @@ function draw(){
   }
   ctx.setLineDash([]);
 
-  // 安全屋
-  hoverSH = null;
+  // 安全屋轮廓
   if($("chkSH").checked && safehouses.length){
-    const p = padTiles|0;
-    if(mouseWorld){
-      for(const sh of safehouses){
-        if(mouseWorld.x >= sh.x-p && mouseWorld.x <= sh.x+sh.w+p &&
-           mouseWorld.y >= sh.y-p && mouseWorld.y <= sh.y+sh.h+p){ hoverSH = sh; break; }
-      }
-    }
+    const pad = padTiles|0;
     ctx.strokeStyle = "rgba(61,220,132,.75)";
     ctx.setLineDash([6,4]); ctx.lineWidth = 2;
     for(const sh of safehouses){
+      if(sh.x+sh.w < tl.x || sh.x > br.x || sh.y+sh.h < tl.y || sh.y > br.y) continue;
       const a = w2s(sh.x, sh.y), b = w2s(sh.x+sh.w, sh.y+sh.h);
-      if(!inView(sh.x, sh.y, sh.w, sh.h)) continue;
       ctx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
-      if(hoverSH === sh){
-        ctx.fillStyle = "rgba(61,220,132,.12)";
-        ctx.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
-      }
-      if(p > 0){
-        const a2 = w2s(sh.x-p, sh.y-p), b2 = w2s(sh.x+sh.w+p, sh.y+sh.h+p);
+      if(pad > 0){
+        const a2 = w2s(sh.x-pad, sh.y-pad), b2 = w2s(sh.x+sh.w+pad, sh.y+sh.h+pad);
         ctx.strokeStyle = "rgba(61,220,132,.30)";
         ctx.strokeRect(a2.x, a2.y, b2.x-a2.x, b2.y-a2.y);
         ctx.strokeStyle = "rgba(61,220,132,.75)";
@@ -486,33 +552,168 @@ function draw(){
     }
     ctx.setLineDash([]);
   }
+}
 
-  // 正在拖拽的框
+/** 按网格聚合的叠加层：只遍历视野内的格子，并按透明度分档批量填充 */
+function drawCells(tl, br){
+  const g = overlayStep;
+  const i0 = lowerBound(cxList, Math.floor(tl.x/g));
+  const i1 = lowerBound(cxList, Math.floor(br.x/g) + 1);
+  const cy0 = Math.floor(tl.y/g), cy1 = Math.floor(br.y/g);
+  const NB = 6;
+  const delB = [], keepB = [];
+  for(let b=0;b<NB;b++){ delB.push([]); keepB.push([]); }
+  let n = 0;
+
+  for(let i=i0;i<i1;i++){
+    const cx = cxList[i], cell = byCx.get(cx);
+    const j0 = lowerBound(cell.cy, cy0), j1 = lowerBound(cell.cy, cy1 + 1);
+    const x = cx*g;
+    for(let j=j0;j<j1;j++){
+      const y = cell.cy[j]*g;
+      const pop = cell.pop[j], kp = cell.keep[j];
+      if(pop - kp > 0) delB[Math.min(NB-1, Math.floor((pop-kp)/cellMax*NB))].push(x, y);
+      if(kp > 0)       keepB[Math.min(NB-1, Math.floor(kp/cellMax*NB))].push(x, y);
+      n++;
+    }
+  }
+
+  for(let b=0;b<NB;b++){
+    const p = delB[b];
+    if(p.length){
+      ctx.fillStyle = `rgba(255,80,80,${(0.07 + 0.23*(b+1)/NB).toFixed(3)})`;
+      ctx.beginPath();
+      for(let i=0;i<p.length;i+=2){
+        const a = w2s(p[i], p[i+1]), q = w2s(p[i]+g, p[i+1]+g);
+        ctx.rect(a.x, a.y, q.x-a.x, q.y-a.y);
+      }
+      ctx.fill();
+    }
+    const q2 = keepB[b];
+    if(q2.length){
+      ctx.fillStyle = `rgba(61,220,132,${(0.14 + 0.30*(b+1)/NB).toFixed(3)})`;
+      ctx.beginPath();
+      for(let i=0;i<q2.length;i+=2){
+        const a = w2s(q2[i], q2[i+1]), q = w2s(q2[i]+g, q2[i+1]+g);
+        ctx.rect(a.x, a.y, q.x-a.x, q.y-a.y);
+      }
+      ctx.fill();
+    }
+  }
+  return n;
+}
+
+/** 区块级叠加层：直接画真实存在的 .bin（视野裁剪 + 二分定位） */
+function drawBins(tl, br){
+  const bs = binSize();
+  const cap = 60000;
+  const bx0 = Math.floor(tl.x/bs), bx1 = Math.floor(br.x/bs);
+  let lo = 0, hi = binsByX.length;
+  while(lo < hi){ const m = (lo+hi)>>1; if(binsByX[m][0] < bx0) lo = m+1; else hi = m; }
+  const by0 = Math.floor(tl.y/bs), by1 = Math.ceil(br.y/bs);
+  const delP = [], keepP = [];
+  let n = 0, capped = false;
+
+  for(let i=lo;i<binsByX.length;i++){
+    const [bx, rs] = binsByX[i];
+    if(bx > bx1) break;
+    const prot = protectedByX.get(bx);
+    const x = bx*bs;
+    for(const [a,b] of rs){
+      const y0 = Math.max(a, by0), y1 = Math.min(b, by1);
+      for(let by=y0; by<=y1; by++){
+        (isProtected(bx, by, prot) ? keepP : delP).push(x, by*bs);
+        if(++n > cap){ capped = true; break; }
+      }
+      if(capped) break;
+    }
+    if(capped) break;
+  }
+
+  const batch = (arr, style) => {
+    if(!arr.length) return;
+    ctx.fillStyle = style;
+    ctx.beginPath();
+    for(let i=0;i<arr.length;i+=2){
+      const p = w2s(arr[i], arr[i+1]), q = w2s(arr[i]+bs, arr[i+1]+bs);
+      ctx.rect(p.x, p.y, Math.max(1, q.x-p.x), Math.max(1, q.y-p.y));
+    }
+    ctx.fill();
+  };
+  batch(delP, "rgba(255,80,80,0.28)");
+  batch(keepP, "rgba(61,220,132,0.30)");
+  return n;
+}
+
+/** 网格线：太密（屏幕间距过小）就不画，避免 1 格网格把浏览器拖死 */
+function drawGrid(tl, br){
+  const g = gridSize;
+  if(g * zoom < 3.5) return;
+  ctx.strokeStyle = "rgba(255,255,255,.055)"; ctx.lineWidth = 1;
+  ctx.beginPath();
+  const gx0 = Math.floor(tl.x/g)*g, gy0 = Math.floor(tl.y/g)*g;
+  for(let x=gx0; x<=br.x; x+=g){
+    const p = w2s(x,tl.y), q = w2s(x,br.y);
+    ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y);
+  }
+  for(let y=gy0; y<=br.y; y+=g){
+    const p = w2s(tl.x,y), q = w2s(br.x,y);
+    ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y);
+  }
+  ctx.stroke();
+}
+
+/* ---------------- 上层：光标 / 拖拽框 / 读数（鼠标一动只重画这一层） ---------------- */
+function drawTop(){
+  ctx2.clearRect(0,0,W,H);
+  mouseWorld = mouseScreen ? s2w(mouseScreen.x, mouseScreen.y) : null;
+
+  // 命中的安全屋（悬停高亮）
+  hoverSH = null;
+  if($("chkSH").checked && mouseWorld){
+    const pad = padTiles|0;
+    for(const sh of safehouses){
+      if(mouseWorld.x >= sh.x-pad && mouseWorld.x <= sh.x+sh.w+pad &&
+         mouseWorld.y >= sh.y-pad && mouseWorld.y <= sh.y+sh.h+pad){ hoverSH = sh; break; }
+    }
+  }
+  if(hoverSH){
+    const a = w2s(hoverSH.x, hoverSH.y), b = w2s(hoverSH.x+hoverSH.w, hoverSH.y+hoverSH.h);
+    ctx2.fillStyle = "rgba(61,220,132,.14)";
+    ctx2.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
+  }
+
+  // 正在拖拽的保护区
   if(selecting){
     const p = w2s(Math.min(selecting.x1, selecting.x2), Math.min(selecting.y1, selecting.y2));
     const q = w2s(Math.max(selecting.x1, selecting.x2), Math.max(selecting.y1, selecting.y2));
-    ctx.strokeStyle = "rgba(255,196,0,.95)";
-    ctx.setLineDash([6,4]); ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, q.x-p.x, q.y-p.y);
-    ctx.setLineDash([]);
+    ctx2.fillStyle = "rgba(255,196,0,.14)";
+    ctx2.fillRect(p.x, p.y, q.x-p.x, q.y-p.y);
+    ctx2.strokeStyle = "rgba(255,196,0,.95)";
+    ctx2.setLineDash([6,4]); ctx2.lineWidth = 2;
+    ctx2.strokeRect(p.x, p.y, q.x-p.x, q.y-p.y);
+    ctx2.setLineDash([]);
   }
 
   // 光标十字，方便对准
   if(mouseScreen && !panning){
-    ctx.strokeStyle = "rgba(255,255,255,.35)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(mouseScreen.x-7, mouseScreen.y+0.5);
-    ctx.lineTo(mouseScreen.x+7, mouseScreen.y+0.5);
-    ctx.moveTo(mouseScreen.x+0.5, mouseScreen.y-7);
-    ctx.lineTo(mouseScreen.x+0.5, mouseScreen.y+7);
-    ctx.stroke();
+    ctx2.strokeStyle = "rgba(255,255,255,.35)";
+    ctx2.lineWidth = 1;
+    ctx2.beginPath();
+    ctx2.moveTo(mouseScreen.x-7, mouseScreen.y+0.5);
+    ctx2.lineTo(mouseScreen.x+7, mouseScreen.y+0.5);
+    ctx2.moveTo(mouseScreen.x+0.5, mouseScreen.y-7);
+    ctx2.lineTo(mouseScreen.x+0.5, mouseScreen.y+7);
+    ctx2.stroke();
   }
 
   $("hudZoom").textContent = zoom.toFixed(2);
   $("hudCenter").textContent = Math.round(camX) + "," + Math.round(camY);
   updateCoordHud();
 }
+
+/** 视图/数据变化：两层都重画 */
+function redraw(){ draw(); drawTop(); }
 
 /* ---------------- 坐标读数 ---------------- */
 function updateCoordHud(){
@@ -557,7 +758,7 @@ canvas.addEventListener("mousedown", e => {
       const q = keepRects[i];
       if(w.x >= Math.min(q.x1,q.x2) && w.x <= Math.max(q.x1,q.x2) &&
          w.y >= Math.min(q.y1,q.y2) && w.y <= Math.max(q.y1,q.y2)){
-        keepRects.splice(i,1); draw(); refreshKeepInfo(); return;
+        keepRects.splice(i,1); buildOverlay(); redraw(); refreshKeepInfo(); return;
       }
     }
     return;
@@ -574,7 +775,7 @@ canvas.addEventListener("mousedown", e => {
         keepRects.splice(i,1);
       }
     }
-    draw(); refreshKeepInfo(); return;
+    buildOverlay(); redraw(); refreshKeepInfo(); return;
   }
   panning = true; panStart = {sx, sy, camX, camY};
 });
@@ -589,13 +790,13 @@ canvas.addEventListener("mousemove", e => {
     camX = panStart.camX - (sx-panStart.sx)/zoom;
     camY = panStart.camY - (sy-panStart.sy)/zoom;
     tooltip.style.display = "none";
-    draw(); return;
+    redraw(); return;
   }
   if(selecting){
     selecting.x2 = w.x; selecting.y2 = w.y;
-    draw(); return;
+    drawTop(); return;
   }
-  draw();
+  drawTop();
   if(hoverSH){
     const sh = hoverSH;
     showTip(e.clientX, e.clientY,
@@ -617,7 +818,7 @@ canvas.addEventListener("mouseup", () => {
       r.push({x1:selecting.x1, y1:selecting.y1, x2:selecting.x2, y2:selecting.y2});
     }
     selecting = null;
-    refreshKeepInfo(); draw(); return;
+    refreshKeepInfo(); buildOverlay(); redraw(); return;
   }
   panning = false; panStart = null;
 });
@@ -625,7 +826,7 @@ canvas.addEventListener("mouseup", () => {
 canvas.addEventListener("mouseleave", () => {
   mouseScreen = null;
   tooltip.style.display = "none";
-  draw();
+  drawTop();
 });
 
 canvas.addEventListener("wheel", e => {
@@ -633,15 +834,15 @@ canvas.addEventListener("wheel", e => {
   const r = canvas.getBoundingClientRect();
   const ax = e.clientX-r.left, ay = e.clientY-r.top;
   const before = s2w(ax, ay);
-  zoom = clamp(zoom * Math.exp(-e.deltaY*0.0012), 0.01, 3);
+  zoom = clamp(zoom * Math.exp(-e.deltaY*0.0012), 0.01, 8);
   const after = s2w(ax, ay);
   camX += before.x-after.x; camY += before.y-after.y;
-  draw();
+  redraw();
 }, {passive:false});
 
 window.addEventListener("keydown", e => {
   if((e.key === "Backspace" || e.key === "Delete") && keepRects.length){
-    keepRects.pop(); refreshKeepInfo(); draw();
+    keepRects.pop(); refreshKeepInfo(); buildOverlay(); redraw();
   }
 });
 
@@ -678,11 +879,11 @@ $("btnLoadKeep").onclick = () => pickFile(".json", txt => {
     const rs = Array.isArray(j) ? j : (j.rects || []);
     keepRects = rs.filter(r => Array.isArray(r) && r.length >= 4)
       .map(r => ({x1:+r[0], y1:+r[1], x2:+r[2], y2:+r[3]}));
-    refreshKeepInfo(); draw();
+    refreshKeepInfo(); buildOverlay(); redraw();
   }catch(err){ alert("keep.json 解析失败：" + err.message); }
 });
 
-$("btnClearKeep").onclick = () => { keepRects = []; refreshKeepInfo(); draw(); };
+$("btnClearKeep").onclick = () => { keepRects = []; refreshKeepInfo(); buildOverlay(); redraw(); };
 
 /* ---------------- 载入 ---------------- */
 function pickFile(accept, cb){
@@ -738,14 +939,14 @@ window.addEventListener("drop", e => {
 /* ---------------- 控件 ---------------- */
 $("gridSize").onchange = () => {
   gridSize = Number($("gridSize").value) || 300;
-  recomputeCells(); draw();
+  buildOverlay(); redraw();
 };
-$("chkMap").onchange = () => draw();
-$("chkPop").onchange = () => draw();
-$("chkSH").onchange = () => draw();
-$("lockTR").onchange = () => draw();
-$("lockBL").onchange = () => draw();
-$("btnResetView").onclick = () => { fitView(); draw(); };
+$("chkMap").onchange = () => redraw();
+$("chkPop").onchange = () => redraw();
+$("chkSH").onchange = () => redraw();
+$("lockTR").onchange = () => redraw();
+$("lockBL").onchange = () => redraw();
+$("btnResetView").onclick = () => { fitView(); redraw(); };
 window.addEventListener("resize", resize);
 
 refreshKeepInfo();
