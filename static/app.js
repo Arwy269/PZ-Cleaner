@@ -38,6 +38,7 @@ const S = {
   drag: null,
   busy: false,
   tileStat: { loaded: 0, err: 0 },
+  upAvg: null,
 };
 
 /* ---------------- 基础工具 ---------------- */
@@ -151,7 +152,7 @@ function makeDziLayer() {
     maxNativeZoom: m.refLevel,
     bounds: dziBounds(),
     noWrap: true,
-    keepBuffer: 3,
+    keepBuffer: 5,
     className: 'dzi-tile',
   });
   // Deep Zoom 边缘瓦片是裁切过的，按自然尺寸绘制避免拉伸错位
@@ -173,7 +174,55 @@ function reportTiles() {
   if (!el) return;
   const imgs = document.querySelectorAll('.leaflet-tile-pane img').length;
   el.textContent = '瓦片: ' + S.tileStat.loaded + '/' + imgs +
-    (S.tileStat.err ? ' (失败' + S.tileStat.err + ')' : '');
+    (S.tileStat.err ? ' (失败' + S.tileStat.err + ')' : '') +
+    (S.upAvg ? ' · 上游 ' + Math.round(S.upAvg) + 'ms' : '');
+}
+
+/* ---------------- 视野预取（后台提前下载周围瓦片） ---------------- */
+
+let pfTimer = null;
+function schedulePrefetch() {
+  clearTimeout(pfTimer);
+  pfTimer = setTimeout(prefetchViewport, 400);
+}
+
+function prefetchViewport() {
+  if (!S.map || !S.mapcfg) return;
+  const m = S.mapcfg;
+  const z = Math.round(S.map.getZoom());
+  const size = S.map.getSize();
+  const d = Math.pow(2, m.refLevel);
+  const pad = 320;
+  const corners = [[-pad, -pad], [size.x + pad, -pad],
+                   [size.x + pad, size.y + pad], [-pad, size.y + pad]];
+  let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+  for (const c of corners) {
+    const ll = S.map.containerPointToLatLng(L.point(c[0], c[1]));
+    const scale = Math.pow(2, z) / d;
+    const lx = ll.lng * d * scale;   // = lng * 2^z
+    const ly = -ll.lat * d * scale;  // = -lat * 2^z
+    if (lx < minx) minx = lx;
+    if (lx > maxx) maxx = lx;
+    if (ly < miny) miny = ly;
+    if (ly > maxy) maxy = ly;
+  }
+  const T = m.tileSize;
+  const x0 = Math.max(0, Math.floor(minx / T));
+  const y0 = Math.max(0, Math.floor(miny / T));
+  const x1 = Math.floor(maxx / T);
+  const y1 = Math.floor(maxy / T);
+  if (x1 < x0 || y1 < y0) return;
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64) return; // 一次最多预取 64 块
+  fetch('/api/prefetch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ z, x0, y0, x1, y1 }),
+  }).then((r) => r.json()).then((r) => {
+    if (r && r.avgMs != null) {
+      S.upAvg = r.avgMs;
+      reportTiles();
+    }
+  }).catch(() => {});
 }
 
 /* ---------------- 区块画布 ---------------- */
@@ -747,17 +796,22 @@ function initMap() {
   S.canvasLayer = new ChunkCanvas().addTo(S.map);
   bindDrag();
   bindMouseReadout();
+  S.map.on('moveend zoomend', schedulePrefetch);
 }
 
 async function init() {
   bindUI();
+  $('ovMsg').textContent = '正在连接本地服务…';
+  $('mapOverlay').classList.remove('hidden');
   let boot;
   try {
     boot = await api('/api/bootstrap');
   } catch (e) {
+    $('ovMsg').textContent = '无法连接本地服务：' + e.message;
     toast('无法连接本地服务: ' + e.message, true);
     return;
   }
+  $('ovMsg').textContent = '正在获取底图参数…';
   S.cfg = boot.config;
   S.divisor = boot.config.chunkDivisor;
   $('ver').textContent = 'v' + boot.version;
@@ -771,6 +825,7 @@ async function init() {
     updateMapBadge();
     initMap();
     fitInitial();
+    $('mapOverlay').classList.add('hidden');
     setInterval(reportTiles, 2000);
     setTimeout(reportTiles, 800);
   } else {

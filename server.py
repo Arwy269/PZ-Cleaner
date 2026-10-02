@@ -17,6 +17,7 @@
 """
 
 import argparse
+import hashlib
 import json
 import math
 import mimetypes
@@ -31,6 +32,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -113,8 +115,54 @@ SOURCES = [
 ]
 
 
-def fetch_bytes(url: str, timeout: float = 20.0, cffi: bool = False) -> bytes:
-    """下载字节。cffi=True 时用 curl_cffi 模拟 Chrome TLS（绕过 Cloudflare）。"""
+# ---- 上游下载：线程本地连接池 + 去重 + 耗时统计 ------------------------
+_tlocal = threading.local()
+_up_stats = {"n": 0, "avg_ms": 0.0}
+_up_lock = threading.Lock()
+_inflight = {}
+_inflight_lock = threading.Lock()
+_warm_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="warm")
+
+
+def upstream_avg_ms() -> float:
+    with _up_lock:
+        return round(_up_stats["avg_ms"], 1)
+
+
+def _record_upstream(ms: float):
+    with _up_lock:
+        _up_stats["n"] += 1
+        _up_stats["avg_ms"] = (ms if _up_stats["n"] == 1
+                               else _up_stats["avg_ms"] * 0.7 + ms * 0.3)
+
+
+def get_session(src):
+    """每线程 × 每瓦片源一个可复用连接的 Session（省去每块瓦片的 TCP+TLS 握手）。"""
+    try:
+        from curl_cffi import requests as creq
+    except Exception:
+        return None
+    sessions = getattr(_tlocal, "sessions", None)
+    if sessions is None:
+        sessions = {}
+        _tlocal.sessions = sessions
+    s = sessions.get(src["id"])
+    if s is None:
+        s = creq.Session(impersonate="chrome")
+        sessions[src["id"]] = s
+    return s
+
+
+def fetch_bytes(url: str, timeout: float = 20.0, cffi: bool = False,
+                src=None) -> bytes:
+    """下载字节：优先走连接池；cffi=True 时模拟 Chrome TLS 绕过 Cloudflare。"""
+    if src is not None:
+        s = get_session(src)
+        if s is not None:
+            r = s.get(url, timeout=timeout)
+            if r.status_code != 200:
+                raise RuntimeError(f"HTTP {r.status_code} for {url}")
+            return r.content
     if cffi:
         from curl_cffi import requests as creq
         r = creq.get(url, impersonate="chrome", timeout=timeout)
@@ -162,7 +210,14 @@ class MapMeta:
             "skip": self.skip, "scale": self.scale,
             "x0": self.x0, "y0": self.y0, "sqr": self.sqr,
             "refLevel": self.ref_level,
+            "avgUpstreamMs": upstream_avg_ms(),
         }
+
+    @property
+    def cache_key(self):
+        """缓存目录名 = 源 + 渲染版本（base URL 变化时自动换新，避免投影错位）。"""
+        tag = hashlib.md5(self.src["base"].encode("utf-8")).hexdigest()[:8]
+        return f"{self.src['id']}_{tag}"
 
 
 _map_meta = None
@@ -170,8 +225,62 @@ _map_error = None
 _map_lock = threading.Lock()
 
 
+def _parse_meta(src, info: dict, dzi: bytes) -> MapMeta:
+    root = ET.fromstring(dzi)
+    tile_size = root.attrib.get("TileSize", "256")
+    overlap = root.attrib.get("Overlap", "0")
+    fmt = root.attrib.get("Format", "jpg")
+    size_el = None
+    for el in root.iter():
+        if el.tag.endswith("Size"):
+            size_el = el
+            break
+    w = int(size_el.attrib.get("Width", info.get("w", 0))) if size_el is not None \
+        else int(info.get("w", 0))
+    h = int(size_el.attrib.get("Height", info.get("h", 0))) if size_el is not None \
+        else int(info.get("h", 0))
+    # pzmap.net 的 map_info 提供 tile_size 覆盖（其 dzi 为 1024）
+    if info.get("tile_size"):
+        tile_size = info["tile_size"]
+    return MapMeta(src, tile_size, overlap, fmt, w, h,
+                   info.get("skip", 0), info.get("x0", 0),
+                   info.get("y0", 0), info.get("sqr", 128))
+
+
+def _meta_cache_paths(src):
+    tag = hashlib.md5(src["base"].encode("utf-8")).hexdigest()[:8]
+    d = CACHE_DIR / f"{src['id']}_{tag}"
+    return d / "map_info.json", d / "layer0.dzi"
+
+
+def _load_meta_from_disk(src):
+    """读本地缓存（7 天内有效）——启动不再等待网络。"""
+    inf_p, dzi_p = _meta_cache_paths(src)
+    if not (inf_p.is_file() and dzi_p.is_file()):
+        return None
+    age = max(time.time() - inf_p.stat().st_mtime,
+              time.time() - dzi_p.stat().st_mtime)
+    if age > 7 * 86400:
+        return None
+    try:
+        info = json.loads(inf_p.read_text(encoding="utf-8"))
+        return _parse_meta(src, info, dzi_p.read_bytes())
+    except Exception:
+        return None
+
+
+def _save_meta_to_disk(src, info_b: bytes, dzi_b: bytes):
+    try:
+        inf_p, dzi_p = _meta_cache_paths(src)
+        inf_p.parent.mkdir(parents=True, exist_ok=True)
+        inf_p.write_bytes(info_b)
+        dzi_p.write_bytes(dzi_b)
+    except Exception:
+        pass
+
+
 def load_map_meta(force: bool = False) -> MapMeta:
-    """按配置顺序尝试瓦片源，返回投影参数；全部失败抛 RuntimeError。"""
+    """瓦片源投影参数：本地缓存优先，过期/缺失才访问网络；全部失败抛 RuntimeError。"""
     global _map_meta, _map_error
     with _map_lock:
         if _map_meta is not None and not force:
@@ -180,35 +289,138 @@ def load_map_meta(force: bool = False) -> MapMeta:
         candidates = [s for s in SOURCES if wanted in ("auto", s["id"])]
         errors = []
         for src in candidates:
+            # 1) 本地缓存
+            meta = _load_meta_from_disk(src)
+            if meta is not None:
+                _map_meta, _map_error = meta, None
+                return meta
+            # 2) 在线获取
             try:
-                info = json.loads(fetch_bytes(
-                    src["base"] + "map_info.json", cffi=src["cffi"]).decode("utf-8"))
-                dzi = fetch_bytes(src["base"] + "layer0.dzi", cffi=src["cffi"])
-                root = ET.fromstring(dzi)
-                tile_size = root.attrib.get("TileSize", "256")
-                overlap = root.attrib.get("Overlap", "0")
-                fmt = root.attrib.get("Format", "jpg")
-                size_el = None
-                for el in root.iter():
-                    if el.tag.endswith("Size"):
-                        size_el = el
-                        break
-                w = int(size_el.attrib.get("Width", info.get("w", 0)))
-                h = int(size_el.attrib.get("Height", info.get("h", 0)))
-                # pzmap.net 的 map_info 提供 tile_size 覆盖（其 dzi 为 1024）
-                if info.get("tile_size"):
-                    tile_size = info["tile_size"]
-                _map_meta = MapMeta(
-                    src, tile_size, overlap, fmt, w, h,
-                    info.get("skip", 0), info.get("x0", 0),
-                    info.get("y0", 0), info.get("sqr", 128))
-                _map_error = None
-                return _map_meta
+                info_b = fetch_bytes(src["base"] + "map_info.json",
+                                     cffi=src["cffi"], src=src)
+                dzi_b = fetch_bytes(src["base"] + "layer0.dzi",
+                                    cffi=src["cffi"], src=src)
+                info = json.loads(info_b.decode("utf-8"))
+                meta = _parse_meta(src, info, dzi_b)
+                _save_meta_to_disk(src, info_b, dzi_b)
+                _map_meta, _map_error = meta, None
+                return meta
             except Exception as e:  # noqa: BLE001
+                # 网络失败时回退到过期缓存（总比没有强）
+                inf_p, dzi_p = _meta_cache_paths(src)
+                if inf_p.is_file() and dzi_p.is_file():
+                    try:
+                        info = json.loads(inf_p.read_text(encoding="utf-8"))
+                        meta = _parse_meta(src, info, dzi_p.read_bytes())
+                        _map_meta, _map_error = meta, None
+                        return meta
+                    except Exception:
+                        pass
                 errors.append(f"{src['id']}: {e}")
         _map_meta = None
         _map_error = "；".join(errors) or "没有可用的瓦片源"
         raise RuntimeError(_map_error)
+
+
+TILE_MISSING_DAYS = 30
+
+
+def tile_range_ok(meta, z, x, y) -> bool:
+    if z < 0 or z > meta.ref_level or x < 0 or y < 0:
+        return False
+    pw = math.ceil(meta.w / (2 ** (meta.ref_level - z)))
+    ph = math.ceil(meta.h / (2 ** (meta.ref_level - z)))
+    return (x < max(1, math.ceil(pw / meta.tile_size)) and
+            y < max(1, math.ceil(ph / meta.tile_size)))
+
+
+def warm_tile(meta, z, x, y, wait=True, want_data=True):
+    """确保瓦片落在磁盘缓存里（同名请求去重、失败重试一次）。
+    返回 (status, data|None)：
+      ok      —— 缓存就绪（want_data=False 时 data 为 None）
+      missing —— 上游确认没有这块
+      busy    —— 其他线程正在下载（仅 wait=False 时返回）
+      error   —— 下载失败
+    """
+    key = f"{meta.cache_key}|{z}|{x}|{y}"
+    zdir = CACHE_DIR / meta.cache_key / "layer0_files" / str(z)
+    fpath = zdir / f"{x}_{y}.{meta.fmt}"
+    marker = Path(str(fpath) + ".missing")
+
+    def disk():
+        if fpath.is_file():
+            return ("ok", fpath.read_bytes() if want_data else None)
+        if marker.is_file() and \
+                time.time() - marker.stat().st_mtime < TILE_MISSING_DAYS * 86400:
+            return ("missing", None)
+        return None
+
+    hit = disk()
+    if hit:
+        return hit
+
+    with _inflight_lock:
+        ev = _inflight.get(key)
+        owner = ev is None
+        if owner:
+            ev = threading.Event()
+            _inflight[key] = ev
+    if not owner:
+        if wait:
+            ev.wait(60)
+            hit = disk()
+            return hit if hit else ("error", None)
+        return ("busy", None)
+
+    try:
+        url = f"{meta.src['base']}layer0_files/{z}/{x}_{y}.{meta.fmt}"
+        last_err = None
+        for attempt in range(2):
+            t0 = time.time()
+            try:
+                data = fetch_bytes(url, timeout=25, cffi=meta.src["cffi"],
+                                   src=meta.src)
+                _record_upstream((time.time() - t0) * 1000)
+                try:
+                    zdir.mkdir(parents=True, exist_ok=True)
+                    fpath.write_bytes(data)
+                except Exception:
+                    pass
+                return ("ok", data if want_data else None)
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if "HTTP 404" in str(e):
+                    try:
+                        zdir.mkdir(parents=True, exist_ok=True)
+                        marker.write_text(str(int(time.time())))
+                    except Exception:
+                        pass
+                    return ("missing", None)
+                time.sleep(0.4 * (attempt + 1))
+        print(f"[瓦片下载失败] {url}: {last_err}", flush=True)
+        return ("error", None)
+    finally:
+        with _inflight_lock:
+            _inflight.pop(key, None)
+        ev.set()
+
+
+def submit_prefetch(meta, z, x0, y0, x1, y1):
+    """把一批瓦片丢进后台线程池预热缓存。返回 (queued, cached)。"""
+    queued = cached = 0
+    zdir = CACHE_DIR / meta.cache_key / "layer0_files" / str(z)
+    for x in range(x0, x1 + 1):
+        for y in range(y0, y1 + 1):
+            fpath = zdir / f"{x}_{y}.{meta.fmt}"
+            marker = Path(str(fpath) + ".missing")
+            if fpath.is_file() or (marker.is_file() and
+                                   time.time() - marker.stat().st_mtime <
+                                   TILE_MISSING_DAYS * 86400):
+                cached += 1
+                continue
+            _warm_pool.submit(warm_tile, meta, z, x, y, False, False)
+            queued += 1
+    return queued, cached
 
 
 # --------------------------------------------------------------------------
@@ -612,6 +824,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "缺少 path")
             info = select_save(p)
             return self.send_json({"ok": True, **info, "chunks": chunk_payload()})
+        if path == "/api/prefetch":
+            return self._do_prefetch()
         if path == "/api/rescan":
             with _cur_lock:
                 cur = str(_current["map_dir"] or "")
@@ -705,51 +919,45 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- tiles --------------------------------------------------------
     def _tile(self, z, x, y):
-        print(time.strftime("%H:%M:%S"), f"TILE {z}/{x}/{y}", flush=True)
         try:
             meta = load_map_meta()
         except Exception as e:  # noqa: BLE001
             return self.send_err(502, f"底图源不可用: {e}")
-        if z < 0 or z > meta.ref_level or x < 0 or y < 0:
+        if not tile_range_ok(meta, z, x, y):
             return self.send_err(404, "tile out of range")
-        level_size = math.ceil(meta.w / (2 ** (meta.ref_level - z)))
-        level_size_y = math.ceil(meta.h / (2 ** (meta.ref_level - z)))
-        max_cx = max(1, math.ceil(level_size / meta.tile_size))
-        max_cy = max(1, math.ceil(level_size_y / meta.tile_size))
-        if x >= max_cx or y >= max_cy:
-            return self.send_err(404, "tile out of range")
-
-        src_dir = CACHE_DIR / meta.src["id"] / "layer0_files"
-        fname = f"{x}_{y}.{meta.fmt}"
-        fpath = src_dir / str(z) / fname
-        marker = Path(str(fpath) + ".missing")
-
-        if fpath.is_file():
-            data = fpath.read_bytes()
+        status, data = warm_tile(meta, z, x, y, wait=True, want_data=True)
+        if status == "ok" and data is not None:
             return self._send(200, data, tile_mime(meta),
                               {"Cache-Control": "public, max-age=31536000, immutable"})
-        if marker.is_file() and time.time() - marker.stat().st_mtime < 30 * 86400:
+        if status == "missing":
             return self.send_err(404, "no tile")
+        return self.send_err(502, "上游瓦片下载失败，请稍后重试")
 
-        url = f"{meta.src['base']}layer0_files/{z}/{x}_{y}.{meta.fmt}"
+    def _do_prefetch(self):
+        """后台预热一批瓦片（视野移动后调用，之后平移/缩放即读本地缓存）。"""
+        data = self.read_json()
         try:
-            data = fetch_bytes(url, timeout=25, cffi=meta.src["cffi"])
-        except Exception as e:  # noqa: BLE001
-            if "HTTP 404" in str(e):
-                try:
-                    fpath.parent.mkdir(parents=True, exist_ok=True)
-                    marker.write_text(str(int(time.time())))
-                except Exception:
-                    pass
-                return self.send_err(404, "no tile")
-            return self.send_err(502, f"上游瓦片下载失败: {e}")
-        try:
-            fpath.parent.mkdir(parents=True, exist_ok=True)
-            fpath.write_bytes(data)
+            z = int(data.get("z"))
+            x0, y0 = int(data.get("x0")), int(data.get("y0"))
+            x1, y1 = int(data.get("x1")), int(data.get("y1"))
         except Exception:
-            pass
-        return self._send(200, data, tile_mime(meta),
-                          {"Cache-Control": "public, max-age=31536000, immutable"})
+            raise ApiError(400, "参数必须是整数")
+        x0, x1 = sorted((x0, x1))
+        y0, y1 = sorted((y0, y1))
+        if x1 - x0 + 1 > 16 or y1 - y0 + 1 > 16:
+            raise ApiError(400, "预取范围过大")
+        try:
+            meta = load_map_meta()
+        except Exception as e:  # noqa: BLE001
+            raise ApiError(502, f"底图源不可用: {e}")
+        if not tile_range_ok(meta, z, x0, y0):
+            return self.send_json({"queued": 0, "cached": 0,
+                                   "avgMs": upstream_avg_ms()})
+        x1 = min(x1, x0 + 15)
+        y1 = min(y1, y0 + 15)
+        queued, cached = submit_prefetch(meta, z, x0, y0, x1, y1)
+        return self.send_json({"queued": queued, "cached": cached,
+                               "avgMs": upstream_avg_ms()})
 
     # ---- static -------------------------------------------------------
     def _static(self, rel: str):
