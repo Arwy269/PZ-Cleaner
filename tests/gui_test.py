@@ -120,6 +120,27 @@ if app.server:
               _json.loads(keep_file.read_text(encoding="utf-8"))["rects"] == [[9800, 9000, 10000, 9200]])
         keep_file.unlink()
 
+# ---- 中文名的安全屋（多字节屋主 / 安全屋名 / 成员）
+# 屋主字符串同时是记录的定位签名，成员名单也按字符集过滤——这几处以前都只认 ASCII，
+# 中文名会被整条丢掉，而安全屋丢了就等于不保护，会被当成普通区块删掉。
+import fixture as _fx
+cn_root = HERE / "_cn_save"
+_fx.make_save(cn_root, bins=[(1225, 1135), (1226, 1136)],
+              safehouses=_fx.chinese_safehouses())
+cn, _w = eng.parse_safehouses(cn_root / "map_meta.bin")
+check("中文屋主的安全屋能被解析出来", len(cn) == 2, f"解析出 {len(cn)} 条")
+if cn:
+    check("中文屋主完整读出", cn[0]["owner"] == "中文玩家", cn[0].get("owner"))
+    check("中文安全屋名完整读出", cn[0]["name"] == "我的基地", cn[0].get("name"))
+    check("中文成员名单完整读出", cn[0]["members"] == ["小明", "老王"], cn[0].get("members"))
+    check("中文安全屋的城镇照常识别", cn[0]["town"] == "Muldraugh, KY", cn[0].get("town"))
+
+# 端到端：中文安全屋必须真的起到保护作用
+cn_res = eng.analyze(cn_root, 0, eng.base_dir() / "keep.json", False)
+check("中文安全屋被算进保护区", cn_res is not None and cn_res["kept_count"] >= 2,
+      f"保留 {cn_res['kept_count'] if cn_res else '?'} 个区块")
+shutil.rmtree(cn_root, ignore_errors=True)
+
 app.destroy()
 shutil.rmtree(root, ignore_errors=True)
 (eng.ensure_web_dir() / "save_index.json").unlink(missing_ok=True)

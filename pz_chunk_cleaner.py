@@ -146,17 +146,26 @@ def human_int(n: int) -> str:
 #                                                                  ^ 屋主字符串出现两次，作为签名
 # 本程序用一条正则一次性定位该签名，比按字节遍历快两个数量级。
 
-_OWNER_CHARS = rb"[A-Za-z0-9_\-\. ]"
-_SIG_RE = re.compile(rb"\x00([\x01-\x28])(" + _OWNER_CHARS + rb"{1,40})[\s\S]{8}\x00\1\2")
-_STR_RE = re.compile(rb"\x00([\x01-\x8c])([\x20-\x7e]{1,140})")
+# 字符串本体允许 UTF-8 多字节：屋主、安全屋名、成员都可能是中文。
+# 长度前缀存的是**字节数**（不是字符数），所以 {1,140} 就是最多 140 字节。
+# 字符集里没有 \x00 和控制符，所以匹配到下一个控制字节就会停，不会越过字段边界。
+_BODY_BYTES = rb"[\x20-\x7e\x80-\xff]"
+
+_SIG_RE = re.compile(rb"\x00([\x01-\x8c])(" + _BODY_BYTES + rb"{1,140})[\s\S]{8}\x00\1\2")
+
+# 字符串扫描只用它找"头"（\x00 + 长度），内容按长度**精确**切。
+# 不能写成 [体]{1,140} 让正则自己去贪：内容的字符集里本来就含高位字节，
+# 遇到紧跟其后的二进制就会被一起吞掉，长度对不上反而把真名字判丢。
+_STR_HEAD = re.compile(rb"\x00([\x01-\x8c])")
+_BODY_RE = re.compile(rb"^" + _BODY_BYTES + rb"+$")
 
 # 安全屋矩形要落在这个范围里才算数，否则当成正则误命中丢掉
 _RECT_MAX_POS = 40_000
 _RECT_MAX_SIDE = 800
 
-# 屋主 / 安全屋名 / 成员都只会是短 ASCII 串，用长度和字符集滤掉二进制噪声
+# 屋主 / 安全屋名 / 成员：短、两端无空白即可
 _NAME_MAX = 40
-_NAME_OK_RE = re.compile(r"^[A-Za-z0-9_\-\. ]{1,%d}$" % _NAME_MAX)
+_NAME_PLAIN_RE = re.compile(r"^[A-Za-z0-9_\-\. ]{1,%d}$" % _NAME_MAX)
 
 # 城镇字段形如 "Muldraugh, KY"，比人名可靠得多，用来给整条记录定位
 _TOWN_PATTERN = re.compile(r"^[^,]+,\s*KY$")
@@ -169,9 +178,22 @@ _MEMBER_WINDOW = 300    # 城镇之后这个距离内，其余像人名的串算
 
 
 def _is_plausible_name(s: str) -> bool:
+    """短、两端无空白、无可打印性问题的字符串。
+    纯 ASCII 名字走快路径保持原有判定；含中文等字符时要求每个字符可打印
+    （能滤掉控制符和二进制噪声）。"""
     if not s or s != s.strip() or len(s) > _NAME_MAX:
         return False
-    return _NAME_OK_RE.match(s) is not None
+    if _NAME_PLAIN_RE.match(s):
+        return True
+    return all(ch.isprintable() for ch in s)
+
+
+def _decode_str(raw: bytes) -> str:
+    """严格按 UTF-8 解码。解不出来说明是二进制噪声，返回空串丢掉。"""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
 
 
 def _is_plausible_rect(x: int, y: int, w: int, h: int) -> bool:
@@ -190,22 +212,30 @@ def _find_signatures(b: bytes) -> List[Tuple[int, int, int, int, int, str, int]]
         x, y, w, h = struct.unpack_from(">iiii", b, head)
         if not _is_plausible_rect(x, y, w, h):
             continue
-        owner = m.group(2).decode("ascii", "ignore").strip()
+        owner = _decode_str(m.group(2)).strip()
         if owner:
             out.append((head, x, y, w, h, owner, m.end()))
     return out
 
 
 def _scan_strings(b: bytes, start: int, end: int) -> List[Tuple[int, str]]:
-    """扫描 [start,end) 内所有长度前缀自洽的 UTF-8 字符串。"""
+    """扫描 [start,end) 内所有长度前缀自洽的 UTF-8 字符串（含中文）。
+
+    只认「\\x00 + 长度 + 正好这么多字节」的整块：长度和实际取到的字节数必须相等，
+    内容里不能有控制字节。这样中文名和紧跟在后面的二进制都能各归各位。
+    """
     out: List[Tuple[int, str]] = []
-    for m in _STR_RE.finditer(b, start, end):
-        raw = m.group(2)
-        if len(raw) != m.group(1)[0]:        # 长度前缀必须和内容一致
+    for m in _STR_HEAD.finditer(b, start, end):
+        i = m.start()
+        stop = i + 2 + m.group(1)[0]
+        if stop > end:
+            break
+        raw = b[i + 2:stop]
+        if not _BODY_RE.match(raw):
             continue
-        s = raw.decode("utf-8", "ignore").strip()
+        s = _decode_str(raw).strip()
         if s:
-            out.append((m.start(), s))
+            out.append((i, s))
     return out
 
 

@@ -50,6 +50,14 @@ def default_safehouses() -> list:
     ]
 
 
+def chinese_safehouses() -> list:
+    """全中文的屋主 / 安全屋名 / 成员，用来验证多字节名字不会因为字符集被滤掉。"""
+    return [
+        (9801, 9087, 36, 32, "中文玩家", "我的基地", "Muldraugh, KY", ["小明", "老王"]),
+        (10000, 10000, 8, 8, "夜行者", "安全屋", "Rosewood, KY", []),
+    ]
+
+
 def make_save(root: Path, bins: Iterable[tuple] = ((1225, 1135), (1226, 1136), (1000, 1000), (999, 500)),
               safehouses: list | None = None, bin_bytes: int = 4096) -> Path:
     """造一个存档目录。bins 里是 (X, Y) 区块坐标，会各写一个 <Y>.bin。"""
