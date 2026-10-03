@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 APP_NAME = "僵毁区块清理器"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 CONFIG_NAME = "config.json"
 INDEX_NAME = "save_index.json"
 KEEP_NAME = "keep.json"

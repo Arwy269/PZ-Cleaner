@@ -6,7 +6,7 @@
 <title>僵毁区块清理器 · 清理范围预览</title>
 <style>
   /* 亮色配色：白底浅灰，强调色用紫（不跟 PZ 地图的蓝绿撞色）。
-     保留=绿，删除=红，额外保护区=琥珀 */
+     保留=绿，删除=红，安全屋=橙虚线，额外保护区=洋红虚线 */
   :root{
     --c-bg:         #eceef2;   /* 页面底色 */
     --c-panel:      #ffffff;   /* 侧栏上端 */
@@ -208,9 +208,9 @@
         <div class="keyLabel">保留（安全屋保护范围）</div></div>
       <div class="keyRow"><div class="keySwatch" style="background:rgba(181,45,45,.28)"></div>
         <div class="keyLabel">将被删除</div></div>
-      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(28,125,71,.75)"></div>
+      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(255,138,0,.85)"></div>
         <div class="keyLabel">安全屋矩形</div></div>
-      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(214,140,10,.9)"></div>
+      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(214,30,120,.9)"></div>
         <div class="keyLabel">额外保护区（本页框选）</div></div>
     </div>
 
@@ -552,18 +552,18 @@ function draw(){
   for(const r of keepRects){
     const p = w2s(Math.min(r.x1,r.x2), Math.min(r.y1,r.y2));
     const q = w2s(Math.max(r.x1,r.x2), Math.max(r.y1,r.y2));
-    baseCtx.fillStyle = "rgba(214,140,10,.14)";
+    baseCtx.fillStyle = "rgba(214,30,120,.14)";
     baseCtx.fillRect(p.x,p.y,q.x-p.x,q.y-p.y);
-    baseCtx.strokeStyle = "rgba(214,140,10,.90)";
+    baseCtx.strokeStyle = "rgba(214,30,120,.90)";
     baseCtx.setLineDash([6,4]); baseCtx.lineWidth = 2;
     baseCtx.strokeRect(p.x,p.y,q.x-p.x,q.y-p.y);
   }
   baseCtx.setLineDash([]);
 
-  // 安全屋轮廓
+  // 安全屋轮廓（橙色：地图本身大片蓝绿，绿色虚线压上去几乎看不出来）
   if(byId("chkSH").checked && safehouses.length){
     const pad = padTiles|0;
-    baseCtx.strokeStyle = "rgba(28,125,71,.75)";
+    baseCtx.strokeStyle = "rgba(255,138,0,.85)";
     baseCtx.setLineDash([6,4]); baseCtx.lineWidth = 2;
     for(const sh of safehouses){
       if(sh.x+sh.w < tl.x || sh.x > br.x || sh.y+sh.h < tl.y || sh.y > br.y) continue;
@@ -571,9 +571,9 @@ function draw(){
       baseCtx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
       if(pad > 0){
         const a2 = w2s(sh.x-pad, sh.y-pad), b2 = w2s(sh.x+sh.w+pad, sh.y+sh.h+pad);
-        baseCtx.strokeStyle = "rgba(28,125,71,.30)";
+        baseCtx.strokeStyle = "rgba(255,138,0,.35)";
         baseCtx.strokeRect(a2.x, a2.y, b2.x-a2.x, b2.y-a2.y);
-        baseCtx.strokeStyle = "rgba(28,125,71,.75)";
+        baseCtx.strokeStyle = "rgba(255,138,0,.85)";
       }
     }
     baseCtx.setLineDash([]);
@@ -705,7 +705,7 @@ function drawTop(){
   }
   if(hoverSH){
     const a = w2s(hoverSH.x, hoverSH.y), b = w2s(hoverSH.x+hoverSH.w, hoverSH.y+hoverSH.h);
-    overlayCtx.fillStyle = "rgba(28,125,71,.14)";
+    overlayCtx.fillStyle = "rgba(255,138,0,.18)";
     overlayCtx.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
   }
 
@@ -713,9 +713,9 @@ function drawTop(){
   if(selecting){
     const p = w2s(Math.min(selecting.x1, selecting.x2), Math.min(selecting.y1, selecting.y2));
     const q = w2s(Math.max(selecting.x1, selecting.x2), Math.max(selecting.y1, selecting.y2));
-    overlayCtx.fillStyle = "rgba(214,140,10,.14)";
+    overlayCtx.fillStyle = "rgba(214,30,120,.14)";
     overlayCtx.fillRect(p.x, p.y, q.x-p.x, q.y-p.y);
-    overlayCtx.strokeStyle = "rgba(214,140,10,.95)";
+    overlayCtx.strokeStyle = "rgba(214,30,120,.95)";
     overlayCtx.setLineDash([6,4]); overlayCtx.lineWidth = 2;
     overlayCtx.strokeRect(p.x, p.y, q.x-p.x, q.y-p.y);
     overlayCtx.setLineDash([]);
