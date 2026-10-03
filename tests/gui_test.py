@@ -159,6 +159,17 @@ if solo:
     check("  城镇正确", solo[0]["town"] == "Riverside, KY", solo[0].get("town"))
 shutil.rmtree(solo_root, ignore_errors=True)
 
+# ---- map\ 里一个区块都没有（新存档 / 刚重置过）
+# 以前这种情况会在解析 map_meta.bin 之前就返回，界面上一个安全屋都看不到。
+empty_root = HERE / "_empty_save"
+_fx.make_save(empty_root, bins=[])
+empty_res = eng.analyze(empty_root, 0, eng.base_dir() / "keep.json", False)
+check("map 目录为空时照样解析出安全屋",
+      empty_res is not None and len(empty_res["safehouses"]) == 2,
+      f"{len(empty_res['safehouses']) if empty_res else '返回 None'} 个")
+check("map 目录为空时待删除数为 0", bool(empty_res) and empty_res["del_count"] == 0)
+shutil.rmtree(empty_root, ignore_errors=True)
+
 app.destroy()
 shutil.rmtree(root, ignore_errors=True)
 (eng.ensure_web_dir() / "save_index.json").unlink(missing_ok=True)

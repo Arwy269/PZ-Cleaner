@@ -28,15 +28,25 @@ def _utf(s: str) -> bytes:
 
 
 def build_map_meta(records: Iterable[Sequence]) -> bytes:
-    """records 里每项：(x, y, w, h, 屋主, 名字, 城镇, [成员...])，字符串都得是 ASCII。"""
+    """records 里每项：(x, y, w, h, 屋主, 名字, 城镇, [成员...])。
+
+    按游戏真实布局写：头部就是成员表——
+        [x][y][w][h][u16 len][屋主][int64 (1+成员数)][屋主][成员…]
+        [8 字节时间戳][u16 len][名字][8 字节时间戳][u16 len][城镇]
+    第一个名字是把屋主重复一遍，所以计数是 1 + 成员数。
+    """
     out = bytearray(b"META" + struct.pack(">i", 249))
     for x, y, w, h, owner, name, town, members in records:
         out += struct.pack(">iiii", x, y, w, h)
         out += _utf(owner)
-        out += struct.pack(">q", 0)          # 两次屋主之间那个 long
+        out += struct.pack(">q", 1 + len(members))     # 成员表长度（含屋主自己）
         out += _utf(owner)
-        for s in [name, town, *members]:
-            out += _utf(s)
+        for m in members:
+            out += _utf(m)
+        out += struct.pack(">q", 1_790_000_000_000)    # 时间戳
+        out += _utf(name)
+        out += struct.pack(">q", 1_790_000_001_000)    # 时间戳
+        out += _utf(town)
     return bytes(out)
 
 
@@ -85,6 +95,7 @@ def make_save(root: Path, bins: Iterable[tuple] = ((1225, 1135), (1226, 1136), (
     if root.exists():
         shutil.rmtree(root)
     m = root / "map"
+    m.mkdir(parents=True, exist_ok=True)     # 一个 .bin 都不造时，map\ 也得存在
     for bx, by in bins:
         d = m / str(bx)
         d.mkdir(parents=True, exist_ok=True)

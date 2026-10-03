@@ -621,6 +621,8 @@ class App(tk.Tk):
             self.embed.reload()          # 让嵌入式地图显示最新结果
         if not res["safehouses"]:
             self._log("警告：没有解析到安全屋，出于安全考虑不会允许删除。")
+        elif res["total_bins"] == 0:
+            self._log("存档的 map 目录里没有任何区块文件，无需清理；安全屋清单已列出供核对。")
         else:
             self.btn_go.state(["!disabled"])
 

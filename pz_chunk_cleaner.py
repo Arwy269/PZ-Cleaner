@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 APP_NAME = "僵毁区块清理器"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 CONFIG_NAME = "config.json"
 INDEX_NAME = "save_index.json"
 KEEP_NAME = "keep.json"
@@ -283,10 +283,55 @@ def _pick_house_name(strings: Sequence[Tuple[int, str]], owner: str, town_at: in
     return ""
 
 
+def _read_member_list(b: bytes, head: int, owner: str) -> Optional[List[str]]:
+    """从记录头部读成员表。
+
+    头部结构就是成员表本身：
+        [矩形 16 字节][u16 长度][屋主][int64 N][N 个 u16 长度前缀的名字]
+    第一个名字是把屋主重复一遍，后面 N-1 个才是成员。
+
+    读不出来（结构对不上）返回 None，调用方再退回启发式。
+    """
+    j = head + 16
+    if j + 2 > len(b):
+        return None
+    n = int.from_bytes(b[j:j + 2], "big")
+    j += 2 + n
+    if j + 8 > len(b):
+        return None
+    count = int.from_bytes(b[j:j + 8], "big", signed=True)
+    j += 8
+    if not (0 <= count <= 1000):
+        return None
+
+    names: List[str] = []
+    for _ in range(count):
+        if j + 2 > len(b):
+            return None
+        L = int.from_bytes(b[j:j + 2], "big")
+        if not (1 <= L <= 140) or j + 2 + L > len(b):
+            return None
+        s = _decode_str(b[j + 2:j + 2 + L])
+        if not s:
+            return None
+        names.append(s.strip())
+        j += 2 + L
+
+    if not names:
+        return []                      # N = 0：这条确实没有成员表
+    if names[0] != owner:
+        return None                    # 第一个名字不是屋主，说明结构不对，别乱信
+    return names[1:]
+
+
 def _pick_members(
     strings: Sequence[Tuple[int, str]], owner: str, town: str, town_at: int, name: str
 ) -> List[str]:
-    """城镇字段之后 _MEMBER_WINDOW 字节内，其余像人名的串算作成员。"""
+    """退回用的启发式：城镇字段之后 _MEMBER_WINDOW 字节内，其余像人名的串算作成员。
+
+    只在头部读不出来时才用。注意它**只是猜测**——窗口里可能混进相邻结构的数据，
+    记录本身没有下一条来限制时尤其明显，所以能读到头部就绝不走这里。
+    """
     out: List[str] = []
     for pos, s in strings:
         if pos - town_at > _MEMBER_WINDOW:
@@ -334,9 +379,13 @@ def parse_safehouses(meta_path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
             continue
 
         name = _pick_house_name(strings, owner, town_at)
+        # 成员优先读记录头部自带的成员表；读不出来才退回窗口启发式
+        members = _read_member_list(b, head, owner)
+        if members is None:
+            members = _pick_members(strings, owner, town, town_at, name)
         records.append({
             "x": int(x), "y": int(y), "w": int(w), "h": int(h),
-            "members": _pick_members(strings, owner, town, town_at, name),
+            "members": members,
             "name": name, "owner": owner, "town": town,
         })
 
@@ -741,7 +790,17 @@ def analyze(root: Path, pad: int, keep_path: Path, use_keep: bool):
     map_dir = root / "map"
     meta_path = root / "map_meta.bin"
 
-    headline("[1/4]", "扫描区块文件 …")
+    # 先解析安全屋。map\ 里一个区块都没有时（新存档、刚重置过）也得能看到安全屋清单，
+    # 所以这一步不能排在"扫到 0 个区块就退出"后面。
+    headline("[1/4]", "解析 map_meta.bin 安全屋 …")
+    t0 = time.time()
+    safehouses, sh_warn = parse_safehouses(meta_path)
+    for w in sh_warn:
+        warn(w)
+    info(f"安全屋：{_c(human_int(len(safehouses)), C_BOLD)} 个"
+         f"（耗时 {time.time() - t0:.1f}s）")
+
+    headline("[2/4]", "扫描区块文件 …")
     t0 = time.time()
     bins, scan_warn, total_bytes = scan_bins(map_dir)
     total_bins = sum(len(v) for v in bins.values())
@@ -750,16 +809,7 @@ def analyze(root: Path, pad: int, keep_path: Path, use_keep: bool):
     if scan_warn:
         warn(f"{scan_warn} 个目录读取失败，已跳过")
     if total_bins == 0:
-        err("该存档的 map 目录里没有任何区块文件，无需清理。")
-        return None
-
-    headline("[2/4]", "解析 map_meta.bin 安全屋 …")
-    t0 = time.time()
-    safehouses, sh_warn = parse_safehouses(meta_path)
-    for w in sh_warn:
-        warn(w)
-    info(f"安全屋：{_c(human_int(len(safehouses)), C_BOLD)} 个"
-         f"（耗时 {time.time() - t0:.1f}s）")
+        warn("map 目录里没有任何区块文件，没什么可清理的；下面的安全屋清单照样列出供核对。")
 
     headline("[3/4]", "计算保护范围 …")
     extra_rects: List[List[float]] = []
