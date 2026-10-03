@@ -40,6 +40,27 @@ def build_map_meta(records: Iterable[Sequence]) -> bytes:
     return bytes(out)
 
 
+def build_map_meta_solo(records: Iterable[Sequence]) -> bytes:
+    """造「屋主列表长度为 0」的安全屋记录——PZ 对这种只写一遍屋主名。
+
+    真实布局（对照游戏自己写出来的 map_meta.bin）：
+        [x][y][w][h][u16 len][屋主][int64 = 0][8 字节时间戳]
+        [u16 len][名字][8 字节时间戳][u16 len][城镇]
+    因为屋主只出现一次，靠"屋主出现两次"的签名完全匹配不到，
+    解析器得靠备用签名兜住；漏掉就会让刚建好的安全屋不被保护、直接被删。
+    """
+    out = bytearray(b"META" + struct.pack(">i", 249))
+    for i, (x, y, w, h, owner, name, town) in enumerate(records):
+        out += struct.pack(">iiii", x, y, w, h)
+        out += _utf(owner)
+        out += struct.pack(">q", 0)              # 屋主列表长度 = 0
+        out += struct.pack(">q", 1_790_000_000_000 + i)   # 时间戳
+        out += _utf(name)
+        out += struct.pack(">q", 1_790_000_001_000 + i)   # 时间戳
+        out += _utf(town)
+    return bytes(out)
+
+
 def default_safehouses() -> list:
     """两个安全屋，坐标固定，方便测试断言。"""
     return [

@@ -6,7 +6,7 @@
 <title>僵毁区块清理器 · 清理范围预览</title>
 <style>
   /* 亮色配色：白底浅灰，强调色用紫（不跟 PZ 地图的蓝绿撞色）。
-     保留=绿，删除=红，安全屋=橙虚线，额外保护区=洋红虚线 */
+     保留=绿，删除=红，安全屋=黄虚线，额外保护区=洋红虚线 */
   :root{
     --c-bg:         #eceef2;   /* 页面底色 */
     --c-panel:      #ffffff;   /* 侧栏上端 */
@@ -208,7 +208,7 @@
         <div class="keyLabel">保留（安全屋保护范围）</div></div>
       <div class="keyRow"><div class="keySwatch" style="background:rgba(181,45,45,.28)"></div>
         <div class="keyLabel">将被删除</div></div>
-      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(255,138,0,.85)"></div>
+      <div class="keyRow"><div class="keySwatch" style="background:transparent;border:3px dashed rgba(255,221,0,1)"></div>
         <div class="keyLabel">安全屋矩形</div></div>
       <div class="keyRow"><div class="keySwatch" style="background:transparent;border:2px dashed rgba(214,30,120,.9)"></div>
         <div class="keyLabel">额外保护区（本页框选）</div></div>
@@ -560,20 +560,29 @@ function draw(){
   }
   baseCtx.setLineDash([]);
 
-  // 安全屋轮廓（橙色：地图本身大片蓝绿，绿色虚线压上去几乎看不出来）
+  // 安全屋轮廓：先用深色描一圈打底，再把亮橙压在上面。
+  // 单靠一条黄线，撞上浅色地形（沙地、水泥地）会糊掉；有深色底衬就不会。
   if(byId("chkSH").checked && safehouses.length){
     const pad = padTiles|0;
-    baseCtx.strokeStyle = "rgba(255,138,0,.85)";
-    baseCtx.setLineDash([6,4]); baseCtx.lineWidth = 2;
+    baseCtx.setLineDash([8,4]);
     for(const sh of safehouses){
       if(sh.x+sh.w < tl.x || sh.x > br.x || sh.y+sh.h < tl.y || sh.y > br.y) continue;
       const a = w2s(sh.x, sh.y), b = w2s(sh.x+sh.w, sh.y+sh.h);
-      baseCtx.strokeRect(a.x, a.y, b.x-a.x, b.y-a.y);
-      if(pad > 0){
+      const rw = b.x - a.x, rh = b.y - a.y;
+
+      baseCtx.lineWidth = 6;                        // 深色底衬
+      baseCtx.strokeStyle = "rgba(32,22,0,.72)";
+      baseCtx.strokeRect(a.x, a.y, rw, rh);
+
+      baseCtx.lineWidth = 3;                        // 亮橙压面
+      baseCtx.strokeStyle = "rgba(255,221,0,1)";
+      baseCtx.strokeRect(a.x, a.y, rw, rh);
+
+      if(pad > 0){                                  // 缓冲外扩圈：只做提示，保持轻
         const a2 = w2s(sh.x-pad, sh.y-pad), b2 = w2s(sh.x+sh.w+pad, sh.y+sh.h+pad);
-        baseCtx.strokeStyle = "rgba(255,138,0,.35)";
+        baseCtx.lineWidth = 1.5;
+        baseCtx.strokeStyle = "rgba(255,221,0,.55)";
         baseCtx.strokeRect(a2.x, a2.y, b2.x-a2.x, b2.y-a2.y);
-        baseCtx.strokeStyle = "rgba(255,138,0,.85)";
       }
     }
     baseCtx.setLineDash([]);
@@ -705,7 +714,7 @@ function drawTop(){
   }
   if(hoverSH){
     const a = w2s(hoverSH.x, hoverSH.y), b = w2s(hoverSH.x+hoverSH.w, hoverSH.y+hoverSH.h);
-    overlayCtx.fillStyle = "rgba(255,138,0,.18)";
+    overlayCtx.fillStyle = "rgba(255,221,0,.22)";
     overlayCtx.fillRect(a.x, a.y, b.x-a.x, b.y-a.y);
   }
 

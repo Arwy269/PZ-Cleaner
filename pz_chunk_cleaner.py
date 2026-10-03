@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 APP_NAME = "僵毁区块清理器"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 CONFIG_NAME = "config.json"
 INDEX_NAME = "save_index.json"
 KEEP_NAME = "keep.json"
@@ -151,7 +151,13 @@ def human_int(n: int) -> str:
 # 字符集里没有 \x00 和控制符，所以匹配到下一个控制字节就会停，不会越过字段边界。
 _BODY_BYTES = rb"[\x20-\x7e\x80-\xff]"
 
+# 签名一：屋主字符串在一条记录里出现两次，中间夹着屋主列表的长度——
+#         结构是 [屋主][列表长度 N][屋主][N 个名字…]，N 至少是 1。
 _SIG_RE = re.compile(rb"\x00([\x01-\x8c])(" + _BODY_BYTES + rb"{1,140})[\s\S]{8}\x00\1\2")
+# 签名二：列表长度为 0 时，PZ 不写第二遍屋主，屋主后面直接跟 8 个零字节。
+#         刚建好、还没填成员的安全屋就是这种形态，签名一完全匹配不到它——
+#         漏掉的后果是这条安全屋不进保护区，会被当普通区块删掉。
+_SIG_SOLO_RE = re.compile(rb"\x00([\x01-\x8c])(" + _BODY_BYTES + rb"{1,140})\x00{8}")
 
 # 字符串扫描只用它找"头"（\x00 + 长度），内容按长度**精确**切。
 # 不能写成 [体]{1,140} 让正则自己去贪：内容的字符集里本来就含高位字节，
@@ -203,18 +209,28 @@ def _is_plausible_rect(x: int, y: int, w: int, h: int) -> bool:
 
 
 def _find_signatures(b: bytes) -> List[Tuple[int, int, int, int, int, str, int]]:
-    """返回 [(记录起点, x, y, w, h, 屋主, 屋主字符串结束位置)]。"""
+    """返回 [(记录起点, x, y, w, h, 屋主, 屋主字符串结束位置)]。
+
+    两条签名都要试：列表长度 >= 1 的用签名一，长度 == 0 的用签名二。
+    漏掉后者会让刚建好的安全屋不进保护区，直接被当普通区块删掉。
+    """
     out: List[Tuple[int, int, int, int, int, str, int]] = []
-    for m in _SIG_RE.finditer(b):
-        head = m.start() - 16
-        if head < 0:
-            continue
-        x, y, w, h = struct.unpack_from(">iiii", b, head)
-        if not _is_plausible_rect(x, y, w, h):
-            continue
-        owner = _decode_str(m.group(2)).strip()
-        if owner:
-            out.append((head, x, y, w, h, owner, m.end()))
+    seen: Set[int] = set()
+    for rx in (_SIG_RE, _SIG_SOLO_RE):
+        for m in rx.finditer(b):
+            head = m.start() - 16
+            if head < 0 or head in seen:
+                continue
+            if len(m.group(2)) != m.group(1)[0]:   # 长度前缀必须和内容一致
+                continue
+            x, y, w, h = struct.unpack_from(">iiii", b, head)
+            if not _is_plausible_rect(x, y, w, h):
+                continue
+            owner = _decode_str(m.group(2)).strip()
+            if owner:
+                seen.add(head)
+                out.append((head, x, y, w, h, owner, m.end()))
+    out.sort(key=lambda t: t[0])          # 后面按顺序取"下一条记录起点"，必须有序
     return out
 
 

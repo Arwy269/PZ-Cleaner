@@ -141,6 +141,24 @@ check("中文安全屋被算进保护区", cn_res is not None and cn_res["kept_c
       f"保留 {cn_res['kept_count'] if cn_res else '?'} 个区块")
 shutil.rmtree(cn_root, ignore_errors=True)
 
+# ---- 屋主列表长度为 0 的安全屋
+# PZ 对这种只写一遍屋主名（不重复），靠"屋主出现两次"的签名完全匹配不到。
+# 刚建好、还没填成员的安全屋就是这种形态；漏掉它 = 这个安全屋不会被保护。
+solo_root = HERE / "_solo_save"
+solo_root.mkdir(parents=True, exist_ok=True)
+(solo_root / "map_meta.bin").write_bytes(_fx.build_map_meta_solo([
+    (9492, 3330, 105, 94, "2333smiles", "我是测试的名字", "Riverside, KY"),
+]))
+solo, _w = eng.parse_safehouses(solo_root / "map_meta.bin")
+check("屋主列表长度为 0 的安全屋也能解析出来", len(solo) == 1, f"解析出 {len(solo)} 条")
+if solo:
+    check("  屋主正确", solo[0]["owner"] == "2333smiles", solo[0].get("owner"))
+    check("  名字正确", solo[0]["name"] == "我是测试的名字", solo[0].get("name"))
+    check("  尺寸正确", (solo[0]["w"], solo[0]["h"]) == (105, 94),
+          f"{solo[0].get('w')}×{solo[0].get('h')}")
+    check("  城镇正确", solo[0]["town"] == "Riverside, KY", solo[0].get("town"))
+shutil.rmtree(solo_root, ignore_errors=True)
+
 app.destroy()
 shutil.rmtree(root, ignore_errors=True)
 (eng.ensure_web_dir() / "save_index.json").unlink(missing_ok=True)
